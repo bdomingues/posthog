@@ -215,8 +215,8 @@ def _evaluate_gate(
         extra={
             "action": action_class.key,
             "user": request.user.id,
-            "method": request.method,
-            "path": request.path,
+            "method": getattr(request, "method", ""),
+            "path": getattr(request, "path", ""),
         },
     )
 

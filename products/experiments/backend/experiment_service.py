@@ -3165,7 +3165,9 @@ class _ServiceRequest:
     def __init__(self, user: Any):
         self.user = user
         self.method = "POST"
+        self.path = "/"
         self.data: dict = {}
+        self.GET: dict = {}
         self.META: dict = {}
         self.headers: dict = {}
         self.session: dict = {}

@@ -98,6 +98,21 @@ class TestExperimentServiceApprovals(APIBaseTest):
         assert experiment.feature_flag.active is False
         assert experiment.start_date is None
 
+    def test_launch_under_enable_policy_without_request_requires_approval(self, _mock_enabled):
+        # Internal callers (e.g. _create_running_experiment) invoke launch with request=None,
+        # which builds a _ServiceRequest shim. The gate must still raise ApprovalRequired
+        # rather than crashing on a missing request attribute.
+        experiment = self._create_draft_experiment("launch-gated-no-request")
+        self._create_enable_policy()
+
+        with self.assertRaises(ApprovalRequired):
+            self._service().launch_experiment(experiment)
+
+        experiment.refresh_from_db()
+        experiment.feature_flag.refresh_from_db()
+        assert experiment.feature_flag.active is False
+        assert experiment.start_date is None
+
     def test_pause_under_disable_policy_requires_approval(self, _mock_enabled):
         experiment = self._create_launched_experiment("pause-gated")
         assert experiment.feature_flag.active is True
