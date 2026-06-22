@@ -60,6 +60,16 @@ class TestExperimentServiceApprovals(APIBaseTest):
             created_by=self.user,
         )
 
+    def _create_update_policy(self) -> ApprovalPolicy:
+        return ApprovalPolicy.objects.create(
+            organization=self.organization,
+            team=self.team,
+            action_key="feature_flag.update",
+            conditions={},
+            approver_config={"quorum": 1, "users": [self.user.id]},
+            created_by=self.user,
+        )
+
     def _create_draft_experiment(self, feature_flag_key: str) -> Experiment:
         return self._service().create_experiment(
             name="Approval Test",
@@ -122,3 +132,23 @@ class TestExperimentServiceApprovals(APIBaseTest):
         assert launched.start_date is not None
         launched.feature_flag.refresh_from_db()
         assert launched.feature_flag.active is True
+
+    def test_ship_variant_under_update_policy_requires_approval(self, _mock_enabled):
+        # ship_variant rewrites the flag's variant rollout (50/50 -> 100/0), a rollout_percentage
+        # change gated by feature_flag.update. It routes through FeatureFlagSerializer, so the gate
+        # must fire and leave the flag's filters untouched.
+        experiment = self._create_launched_experiment("ship-gated")
+        original_filters = experiment.feature_flag.filters
+        original_variants = original_filters["multivariate"]["variants"]
+        assert any(v["key"] == "test" and v["rollout_percentage"] == 50 for v in original_variants)
+
+        self._create_update_policy()
+
+        with self.assertRaises(ApprovalRequired):
+            self._service().ship_variant(experiment, variant_key="test", request=self._request())
+
+        experiment.refresh_from_db()
+        experiment.feature_flag.refresh_from_db()
+        # Flag distribution unchanged and experiment not ended.
+        assert experiment.feature_flag.filters["multivariate"]["variants"] == original_variants
+        assert experiment.end_date is None

@@ -10,6 +10,41 @@ from products.feature_flags.backend.api.feature_flag import FeatureFlagSerialize
 from products.feature_flags.backend.models.feature_flag import FeatureFlag
 
 
+def _get_validated_change(request, view, *args, **kwargs) -> dict[str, Any]:
+    """Resolve the change actually being saved.
+
+    @approval_gate wraps ``FeatureFlagSerializer.update(self, instance, validated_data)``,
+    so the validated change is ``args[1]`` (or ``validated_data`` in kwargs). The raw HTTP
+    request body is NOT the source of truth: internal callers (experiment launch/pause/resume,
+    ship_variant) drive ``serializer.update()`` from a POST whose body has no flag delta, yet
+    the serializer's validated_data carries the real change. Read from validated_data first and
+    only fall back to ``request.data`` when no validated change is available (e.g. direct
+    detection calls in tests).
+    """
+    change: Optional[dict[str, Any]] = None
+
+    if len(args) >= 2 and isinstance(args[1], dict):
+        change = args[1]
+    elif isinstance(kwargs.get("validated_data"), dict):
+        change = kwargs["validated_data"]
+    elif isinstance(getattr(view, "validated_data", None), dict):
+        change = view.validated_data
+    else:
+        request_data = getattr(request, "data", None)
+        change = request_data if isinstance(request_data, dict) else {}
+
+    # FeatureFlagSerializer maps the `filters` field to `get_filters` in validated_data
+    # (the rename back to `filters` happens inside update(), after the gate runs). Normalize
+    # to the input field name `filters` so detection/intent — and the re-applied
+    # full_request_data — read it regardless of the change's origin.
+    if "get_filters" in change:
+        normalized = {k: v for k, v in change.items() if k != "get_filters"}
+        normalized.setdefault("filters", change["get_filters"])
+        change = normalized
+
+    return change
+
+
 def _check_version_staleness(intent_data: dict[str, Any], context: Optional[dict[str, Any]] = None) -> bool:
     """Check staleness by comparing stored version precondition against current instance version."""
     instance = context.get("instance") if context else None
@@ -77,9 +112,7 @@ class FeatureFlagActionBase(BaseAction):
 
     @classmethod
     def detect(cls, request, view, *args, **kwargs) -> bool:
-        if request.method not in ["PATCH", "PUT"]:
-            return False
-
+        # Require an existing instance — a create has none and is gated separately, not here.
         try:
             flag = cls._get_instance(view, *args, **kwargs)
             if not flag:
@@ -87,7 +120,8 @@ class FeatureFlagActionBase(BaseAction):
         except Exception:
             return False
 
-        desired_active = request.data.get("active")
+        change = _get_validated_change(request, view, *args, **kwargs)
+        desired_active = change.get("active")
         current_active = flag.active
 
         if (
@@ -106,18 +140,19 @@ class FeatureFlagActionBase(BaseAction):
     @classmethod
     def extract_intent(cls, request, view, *args, **kwargs) -> dict[str, Any]:
         flag = cls._get_instance(view, *args, **kwargs)
+        change = _get_validated_change(request, view, *args, **kwargs)
 
         gated_changes = {}
         for field in cls.intent_fields:
-            if field in request.data:
-                gated_changes[field] = request.data[field]
+            if field in change:
+                gated_changes[field] = change[field]
 
         return {
             "flag_id": flag.id,
             "flag_key": flag.key,
             "current_state": {"active": flag.active},
             "gated_changes": gated_changes,
-            "full_request_data": dict(request.data),
+            "full_request_data": dict(change),
             "preconditions": {
                 "version": flag.version,
                 "updated_at": flag.updated_at.isoformat() if flag.updated_at else None,
@@ -326,9 +361,6 @@ class UpdateFeatureFlagAction(BaseAction):
 
     @classmethod
     def detect(cls, request, view, *args, **kwargs) -> bool:
-        if request.method not in ["PATCH", "PUT"]:
-            return False
-
         try:
             flag = cls._get_instance(view, *args, **kwargs)
             if not flag:
@@ -336,14 +368,16 @@ class UpdateFeatureFlagAction(BaseAction):
         except Exception:
             return False
 
-        desired_active = request.data.get("active")
+        change = _get_validated_change(request, view, *args, **kwargs)
+
+        desired_active = change.get("active")
         current_active = flag.active
 
         if desired_active is not None and desired_active != current_active:
-            if "filters" not in request.data:
+            if "filters" not in change:
                 return False
 
-        new_filters = request.data.get("filters")
+        new_filters = change.get("filters")
         if not new_filters:
             return False
 
@@ -361,9 +395,10 @@ class UpdateFeatureFlagAction(BaseAction):
     @classmethod
     def extract_intent(cls, request, view, *args, **kwargs) -> dict[str, Any]:
         flag = cls._get_instance(view, *args, **kwargs)
+        change = _get_validated_change(request, view, *args, **kwargs)
 
         old_filters = flag.filters or {}
-        new_filters = request.data.get("filters", {})
+        new_filters = change.get("filters", {})
 
         old_rollout_percentages = cls._extract_rollout_percentages(old_filters)
         new_rollout_percentages = cls._extract_rollout_percentages(new_filters)
@@ -380,7 +415,7 @@ class UpdateFeatureFlagAction(BaseAction):
                 "rollout_percentage": new_rollout_percentages,
             },
             "triggered_paths": triggered_paths,
-            "full_request_data": dict(request.data),
+            "full_request_data": dict(change),
             "preconditions": {
                 "version": flag.version,
                 "updated_at": flag.updated_at.isoformat() if flag.updated_at else None,
