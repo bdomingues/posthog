@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from datetime import date, datetime, timedelta
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -17,6 +17,9 @@ from django.utils import timezone
 import pydantic
 import structlog
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import JSONParser
+from rest_framework.request import Request
+from rest_framework.test import APIRequestFactory
 
 from posthog.schema import (
     ActionsNode,
@@ -1281,7 +1284,61 @@ class ExperimentService:
     # Launch
     # ------------------------------------------------------------------
 
-    @transaction.atomic
+    def _set_flag_active_gated(self, feature_flag: FeatureFlag, active: bool, request: Any) -> None:
+        """Flip a flag's active state THROUGH the approval gate.
+
+        Routing the flip through FeatureFlagSerializer.update() honours the
+        @approval_gate so the feature_flag.enable/disable policies apply. Raises
+        ApprovalRequired (which surfaces as a 409 + change_request_id) when a
+        policy requires approval; in that case the flag is left untouched.
+
+        The gate's detect()/extract_intent() read the *request body* (the
+        feature-flag PATCH payload), not the serializer's `data`. The incoming
+        request is an experiment launch/pause/resume POST whose body has no
+        `active` field, so it cannot drive the gate. We synthesize a feature-flag
+        PATCH request carrying `{"active": active}` (preserving the caller's
+        authenticated user) so the enable/disable action detects the change and
+        resource-scoped dedup works (POST intents resolve resource_id=None).
+
+        Pass BOTH get_team and get_organization so the gate resolves the policy
+        from context rather than falling back to instance derivation.
+        """
+        flag_request = self._build_flag_patch_request({"active": active}, request)
+        serializer = FeatureFlagSerializer(
+            instance=feature_flag,
+            data={"active": active},
+            partial=True,
+            context={
+                "request": flag_request,
+                "get_team": lambda: self.team,
+                "get_organization": lambda: self.team.organization,
+                "team_id": self.team.id,
+                "project_id": self.team.project_id,
+            },
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+    def _build_flag_patch_request(self, data: dict[str, Any], source_request: Any) -> Request:
+        """Build a feature-flag PATCH request carrying ``data`` as its body.
+
+        The approval gate keys off the HTTP method and request body, so a flag
+        flip routed from a non-flag endpoint needs a PATCH request whose body is
+        the flag delta. The authenticated user is copied from ``source_request``
+        so policy evaluation (actor) and analytics attribute correctly.
+        """
+        wsgi_request = APIRequestFactory().patch("/", data, format="json")
+        flag_request = cast(Request, Request(wsgi_request, parsers=[JSONParser()]))
+        flag_request.user = getattr(source_request, "user", None) or self.user
+        # Force the parsed body to be read so the gate sees the delta.
+        _ = flag_request.data
+        return flag_request
+
+    # Not @transaction.atomic: the flag flip goes through the FeatureFlagSerializer
+    # approval workflow, which conflicts with atomic (an ApprovalRequired propagating
+    # out of an atomic block would roll back the just-created ChangeRequest). The flag
+    # is flipped through the gate first, so an ApprovalRequired aborts before any
+    # experiment mutation.
     def launch_experiment(self, experiment: Experiment, *, request: Any | None = None) -> Experiment:
         """Launch a draft experiment: validate readiness, set start_date, activate feature flag."""
         if not experiment.is_draft:
@@ -1291,6 +1348,11 @@ class ExperimentService:
         feature_flag = experiment.feature_flag
         self._assert_flag_not_deleted_for_launch(feature_flag)
         self._validate_existing_flag(feature_flag)
+
+        # Activate the feature flag through the approval gate first. If approval is
+        # required this raises ApprovalRequired (-> 409) before we touch the experiment,
+        # so start_date stays None and the experiment is not launched.
+        self._set_flag_active_gated(feature_flag, True, request)
 
         # Set start_date
         experiment.start_date = timezone.now()
@@ -1310,10 +1372,6 @@ class ExperimentService:
                         excluded_variants=(experiment.parameters or {}).get("excluded_variants"),
                     ),
                 )
-
-        # Activate feature flag
-        feature_flag.active = True
-        feature_flag.save()
 
         experiment.save()
 
@@ -1394,7 +1452,8 @@ class ExperimentService:
     # Pause / Resume
     # ------------------------------------------------------------------
 
-    @transaction.atomic
+    # Not @transaction.atomic — the flag flip goes through the FeatureFlagSerializer
+    # approval workflow, which conflicts with atomic (see _set_flag_active_gated).
     def pause_experiment(self, experiment: Experiment, *, request: Any | None = None) -> Experiment:
         """Pause a running experiment: deactivate its feature flag so it is no longer served by /decide."""
         if experiment.is_draft:
@@ -1408,8 +1467,9 @@ class ExperimentService:
         if not feature_flag.active:
             raise ValidationError("Experiment is already paused.")
 
-        feature_flag.active = False
-        feature_flag.save(update_fields=["active"])
+        # Deactivate through the approval gate. An ApprovalRequired (-> 409) aborts the
+        # pause before we report it, leaving the flag active.
+        self._set_flag_active_gated(feature_flag, False, request)
 
         # Re-fetch so the serializer sees the updated flag
         experiment.feature_flag = feature_flag
@@ -1418,7 +1478,8 @@ class ExperimentService:
 
         return experiment
 
-    @transaction.atomic
+    # Not @transaction.atomic — the flag flip goes through the FeatureFlagSerializer
+    # approval workflow, which conflicts with atomic (see _set_flag_active_gated).
     def resume_experiment(self, experiment: Experiment, *, request: Any | None = None) -> Experiment:
         """Resume a paused experiment: reactivate its feature flag so /decide serves variants again."""
         if experiment.is_draft:
@@ -1432,8 +1493,9 @@ class ExperimentService:
         if feature_flag.active:
             raise ValidationError("Experiment is not paused.")
 
-        feature_flag.active = True
-        feature_flag.save(update_fields=["active"])
+        # Reactivate through the approval gate. An ApprovalRequired (-> 409) aborts the
+        # resume before we report it, leaving the flag paused.
+        self._set_flag_active_gated(feature_flag, True, request)
 
         # Re-fetch so the serializer sees the updated flag
         experiment.feature_flag = feature_flag
