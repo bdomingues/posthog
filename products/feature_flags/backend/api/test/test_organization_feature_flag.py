@@ -1480,3 +1480,87 @@ class TestOrganizationFeatureFlagEvaluations(ClickhouseTestMixin, APIBaseTest):
             body = self.client.get(self._url("shared_flag")).json()
         for entry in body:
             assert entry["evaluations_7d"] is None
+
+
+@patch("posthog.approvals.decorators._is_approvals_enabled", return_value=True)
+class TestOrganizationFeatureFlagCopyApprovalGate(APIBaseTest):
+    """Copying a flag routes through FeatureFlagSerializer create()/update(), so a copy that
+    lands the destination flag in a policy-guarded state must be gated. The gate raises inside
+    serializer.save(), which copy_flags surfaces as a per-project failure (the row is NOT made)."""
+
+    def setUp(self):
+        super().setUp()
+        self.team_1 = self.team
+        self.team_2 = Team.objects.create(organization=self.organization)
+        self.source_flag = FeatureFlag.objects.create(
+            team=self.team_1,
+            created_by=self.user,
+            key="copy-gate-flag",
+            active=True,
+            filters={"groups": [{"rollout_percentage": 100}]},
+        )
+
+    def _enable_policy(self, team) -> None:
+        from posthog.approvals.models import ApprovalPolicy
+
+        ApprovalPolicy.objects.create(
+            organization=self.organization,
+            team=team,
+            action_key="feature_flag.enable",
+            conditions={},
+            approver_config={"quorum": 1, "users": [self.user.id]},
+            created_by=self.user,
+        )
+
+    def _copy(self, target_ids: list[int], disable: bool = False) -> Any:
+        url = f"/api/organizations/{self.organization.id}/feature_flags/copy_flags"
+        return self.client.post(
+            url,
+            {
+                "feature_flag_key": self.source_flag.key,
+                "from_project": self.source_flag.team_id,
+                "target_project_ids": target_ids,
+                **({"disable_copied_flag": True} if disable else {}),
+            },
+        )
+
+    def test_copy_active_flag_to_new_target_under_policy_is_gated(self, _mock_enabled):
+        self._enable_policy(self.team_2)
+
+        response = self._copy([self.team_2.id])
+
+        assert response.status_code == status.HTTP_200_OK
+        body = response.json()
+        assert body["success"] == []
+        assert len(body["failed"]) == 1
+        assert body["failed"][0]["project_id"] == self.team_2.id
+        assert not FeatureFlag.objects.filter(team=self.team_2, key=self.source_flag.key).exists()
+
+    def test_copy_active_flag_onto_existing_active_target_is_gated(self, _mock_enabled):
+        # Existing destination flag is enabled via update() — covered by Task 2; assert it here too.
+        existing = FeatureFlag.objects.create(
+            team=self.team_2,
+            created_by=self.user,
+            key=self.source_flag.key,
+            active=False,
+            filters={"groups": [{"rollout_percentage": 0}]},
+        )
+        self._enable_policy(self.team_2)
+
+        response = self._copy([self.team_2.id])
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["success"] == []
+        existing.refresh_from_db()
+        assert existing.active is False
+
+    def test_copy_disabled_flag_to_new_target_under_policy_succeeds(self, _mock_enabled):
+        self._enable_policy(self.team_2)
+
+        response = self._copy([self.team_2.id], disable=True)
+
+        assert response.status_code == status.HTTP_200_OK
+        body = response.json()
+        assert len(body["success"]) == 1
+        assert body["failed"] == []
+        assert FeatureFlag.objects.filter(team=self.team_2, key=self.source_flag.key, active=False).exists()

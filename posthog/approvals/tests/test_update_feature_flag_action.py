@@ -178,11 +178,18 @@ class TestDetectFromValidatedData(APIBaseTest):
         assert intent["full_request_data"]["filters"]["groups"][0]["rollout_percentage"] == 90
         assert "get_filters" not in intent["full_request_data"]
 
-    def test_detect_requires_existing_instance(self):
-        # No instance (a create) must not fire — create gating is handled separately.
+    def test_enable_fires_on_create_born_active(self):
+        # A brand-new flag born active is gated (create-as-single-arg, the production shape).
         view = self._serializer_view()
 
-        result = EnableFeatureFlagAction.detect(self._post_request(), view, None, {"active": True})
+        result = EnableFeatureFlagAction.detect(self._post_request(), view, {"key": "f", "active": True})
+
+        assert result is True
+
+    def test_enable_does_not_fire_on_create_born_disabled(self):
+        view = self._serializer_view()
+
+        result = EnableFeatureFlagAction.detect(self._post_request(), view, {"key": "f", "active": False})
 
         assert result is False
 
