@@ -144,6 +144,8 @@ class FeatureFlagActionBase(BaseAction):
                 "team": context.get("team") if context else flag.team,
                 "team_id": context.get("team_id") if context else flag.team_id,
                 "project_id": context.get("project_id") if context else flag.team.project_id,
+                # Already approved — keep the gate from re-firing on this serializer.
+                "approval_apply": True,
             }
 
             if context and "request" in context:
@@ -434,6 +436,8 @@ class UpdateFeatureFlagAction(BaseAction):
                 "team": context.get("team") if context else flag.team,
                 "team_id": context.get("team_id") if context else flag.team_id,
                 "project_id": context.get("project_id") if context else flag.team.project_id,
+                # Already approved — keep the gate from re-firing on this serializer.
+                "approval_apply": True,
             }
 
             if context and "request" in context:

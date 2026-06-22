@@ -18,6 +18,7 @@ from posthog.approvals.policies import PolicyDecision, PolicyEngine
 from posthog.approvals.serializers import ChangeRequestSerializer
 from posthog.constants import AvailableFeature
 from posthog.event_usage import report_user_action
+from posthog.models import Team
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +43,25 @@ class GateResult:
 def _extract_context(view_or_serializer, request=None) -> tuple[Optional[Any], Optional[Any], Optional[Any]]:
     """Extract request, team, organization from either serializer or viewset."""
     if hasattr(view_or_serializer, "context") and isinstance(view_or_serializer.context, dict):
-        req = view_or_serializer.context.get("request")
-        team = view_or_serializer.context.get("get_team", lambda: None)()
-        org = view_or_serializer.context.get("get_organization", lambda: None)()
+        ctx = view_or_serializer.context
+        req = ctx.get("request")
+        team = ctx.get("get_team", lambda: None)()
+        org = ctx.get("get_organization", lambda: None)()
+        # Internal callers build contexts with team_id/get_team but no get_organization,
+        # so the gate must derive team/org from the instance instead of failing open.
+        if team is None:
+            instance = getattr(view_or_serializer, "instance", None)
+            team = getattr(instance, "team", None)
+            if team is None and ctx.get("team_id"):
+                team = Team.objects.filter(id=ctx["team_id"]).first()
+        if org is None and team is not None:
+            org = team.organization
         return req, team, org
     else:
         team = getattr(view_or_serializer, "team", None)
         org = getattr(view_or_serializer, "organization", None)
+        if org is None and team is not None:
+            org = team.organization
         return request, team, org
 
 
@@ -461,6 +474,11 @@ def approval_gate(action_refs: Union[type, str, list]):
         def wrapper(self, *args, **kwargs):
             actions = _resolve_actions(action_refs)
             if not actions:
+                return method(self, *args, **kwargs)
+
+            # The approved change is applied through this same serializer; re-gating it
+            # here would block (or duplicate) a change that is already approved.
+            if isinstance(getattr(self, "context", None), dict) and self.context.get("approval_apply"):
                 return method(self, *args, **kwargs)
 
             is_serializer = hasattr(self, "context") and isinstance(self.context, dict) and "request" in self.context
