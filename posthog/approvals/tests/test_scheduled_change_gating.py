@@ -146,7 +146,7 @@ class TestScheduledChangeGating(APIBaseTest):
         self._update_policy({"type": "before_after", "field": "rollout_percentage", "operator": ">", "value": 0})
         flag = self._disabled_flag(key="rollout-flag")
 
-        new_condition = {
+        new_condition: dict[str, Any] = {
             "variant": None,
             "properties": [],
             "rollout_percentage": 90,
