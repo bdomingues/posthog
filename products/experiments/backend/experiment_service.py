@@ -1862,7 +1862,12 @@ class ExperimentService:
     # Update
     # ------------------------------------------------------------------
 
-    @transaction.atomic
+    # Not @transaction.atomic: the gated feature-flag write
+    # (_sync_feature_flag_on_update) goes through the FeatureFlagSerializer approval
+    # workflow, which conflicts with atomic — an ApprovalRequired propagating out of
+    # an atomic block would roll back the just-created pending ChangeRequest. That flag
+    # write runs first, outside any transaction; the experiment-state writes that follow
+    # are wrapped in a narrow `with transaction.atomic()` block so they stay all-or-nothing.
     def update_experiment(
         self,
         experiment: Experiment,
@@ -1936,187 +1941,218 @@ class ExperimentService:
         saved_metrics_data: list[dict] = update_data.pop("saved_metrics_ids", []) or []
         update_data.pop("get_feature_flag_key", None)
 
-        # --- saved metrics sync (update-in-place) -----------
-        old_saved_metric_uuids: dict[str, set[str]] = {"primary": set(), "secondary": set()}
-        if update_saved_metrics:
-            existing_links = {
-                link.saved_metric_id: link
-                for link in experiment.experimenttosavedmetric_set.select_related("saved_metric").all()
-            }
+        # --- feature flag sync (OUTSIDE the atomic block) ---------------------
+        # The flag write goes through the FeatureFlagSerializer approval gate.
+        # It runs before (and outside) the experiment-state transaction below so
+        # that an ApprovalRequired propagating out of serializer.save() leaves the
+        # just-created pending ChangeRequest intact — wrapping it in atomic would
+        # roll the CR back, leaving an approver with nothing to act on. This mirrors
+        # launch/pause/resume/ship_variant, which gate the flag write non-atomically
+        # for the same reason. The flag write does not depend on any of the
+        # experiment-state writes below, so hoisting it is safe.
+        self._sync_feature_flag_on_update(experiment, update_data, feature_flag, context, update_feature_flag_params)
 
-            for link in existing_links.values():
-                if link.saved_metric.query:
-                    uuid = link.saved_metric.query.get("uuid")
-                    if uuid:
-                        metric_type = (link.metadata or {}).get("type", "primary")
-                        if metric_type == "primary":
-                            old_saved_metric_uuids["primary"].add(uuid)
-                        else:
-                            old_saved_metric_uuids["secondary"].add(uuid)
-
-            new_saved_metric_ids = {sm["id"] for sm in saved_metrics_data}
-            existing_saved_metric_ids = set(existing_links.keys())
-
-            # Delete links no longer in the list (one by one to trigger activity logging)
-            to_delete = existing_saved_metric_ids - new_saved_metric_ids
-            for saved_metric_id in to_delete:
-                existing_links[saved_metric_id].delete()
-
-            # Update or create links
-            for saved_metric_data in saved_metrics_data:
-                saved_metric_id = saved_metric_data["id"]
-                new_metadata = saved_metric_data.get("metadata") or {}
-
-                if saved_metric_id in existing_links:
-                    existing_link = existing_links[saved_metric_id]
-                    if (existing_link.metadata or {}) != new_metadata:
-                        existing_link.metadata = new_metadata
-                        existing_link.save(update_fields=["metadata", "updated_at"])
-                else:
-                    saved_metric_serializer = ExperimentToSavedMetricSerializer(
-                        data={
-                            "experiment": experiment.id,
-                            "saved_metric": saved_metric_id,
-                            "metadata": new_metadata,
-                        },
-                        context=context,
-                    )
-                    saved_metric_serializer.is_valid(raise_exception=True)
-                    saved_metric_serializer.save()
-
-        # --- feature flag sync ------------------------------------------------
-        # Draft experiments always sync parameters to the linked feature flag.
-        # Running experiments only sync when update_feature_flag_params=True,
-        # to prevent accidental side effects (e.g. overwrites when the frontend
-        # spreads stale parameters alongside unrelated updates, or an agent
-        # calls MCP with too many params).
-        if experiment.is_draft or update_feature_flag_params:
-            holdout = experiment.holdout
-            if "holdout" in update_data:
-                holdout = update_data["holdout"]
-
-            if update_data.get("parameters"):
-                variants = update_data["parameters"].get("feature_flag_variants", [])
-                aggregation_group_type_index = update_data["parameters"].get("aggregation_group_type_index")
-
-                existing_groups = feature_flag.filters.get("groups", [])
-                experiment_rollout_percentage = update_data["parameters"].get("rollout_percentage")
-                if experiment_rollout_percentage is not None and existing_groups:
-                    new_groups = [
-                        {**existing_groups[0], "rollout_percentage": experiment_rollout_percentage},
-                        *existing_groups[1:],
-                    ]
-                else:
-                    new_groups = list(existing_groups)
-
-                new_filters = {
-                    **feature_flag.filters,
-                    "groups": new_groups,
-                    "multivariate": {"variants": variants or list(DEFAULT_VARIANTS)},
-                    "aggregation_group_type_index": aggregation_group_type_index,
-                    **holdout_filters_for_flag(holdout.id if holdout else None, holdout.filters if holdout else None),
+        with transaction.atomic():
+            # --- saved metrics sync (update-in-place) -----------
+            old_saved_metric_uuids: dict[str, set[str]] = {"primary": set(), "secondary": set()}
+            if update_saved_metrics:
+                existing_links = {
+                    link.saved_metric_id: link
+                    for link in experiment.experimenttosavedmetric_set.select_related("saved_metric").all()
                 }
 
-                existing_flag_serializer = FeatureFlagSerializer(
-                    feature_flag,
-                    data={"filters": new_filters},
-                    partial=True,
-                    context=context,
-                )
-                existing_flag_serializer.is_valid(raise_exception=True)
-                existing_flag_serializer.save()
-            elif "holdout" in update_data:
-                existing_flag_serializer = FeatureFlagSerializer(
-                    feature_flag,
-                    data={
-                        "filters": {
-                            **feature_flag.filters,
-                            **holdout_filters_for_flag(
-                                holdout.id if holdout else None, holdout.filters if holdout else None
-                            ),
-                        }
-                    },
-                    partial=True,
-                    context=context,
-                )
-                existing_flag_serializer.is_valid(raise_exception=True)
-                existing_flag_serializer.save()
+                for link in existing_links.values():
+                    if link.saved_metric.query:
+                        uuid = link.saved_metric.query.get("uuid")
+                        if uuid:
+                            metric_type = (link.metadata or {}).get("type", "primary")
+                            if metric_type == "primary":
+                                old_saved_metric_uuids["primary"].add(uuid)
+                            else:
+                                old_saved_metric_uuids["secondary"].add(uuid)
 
-        # --- validate updated fields ------------------------------------------
-        # Revalidate the baseline whenever either side of the constraint changes:
-        # the stats_config itself, or the variant set it references. A variants-only
-        # PATCH (e.g. updateDistribution) that renames/removes the current baseline
-        # must not leave a dangling baseline_variant_key behind.
-        update_variants = (update_data.get("parameters") or {}).get("feature_flag_variants")
-        if "stats_config" in update_data or update_variants is not None:
-            variant_keys = self._resolved_variant_keys(experiment, update_data)
-            effective_stats_config = update_data.get("stats_config", experiment.stats_config)
-            self.validate_stats_config(effective_stats_config, variant_keys)
+                new_saved_metric_ids = {sm["id"] for sm in saved_metrics_data}
+                existing_saved_metric_ids = set(existing_links.keys())
 
-        # Defense-in-depth: only validate the inline metric lists this update
-        # is actually touching. Dedup-on-input has already made these lists
-        # unique; validating the stored arrays would block a soft-delete (or any
-        # other PATCH) on rows that pre-date the dedup logic.
-        if "metrics" in update_data or "metrics_secondary" in update_data:
-            self.validate_no_duplicate_metric_uuids(update_data.get("metrics"), update_data.get("metrics_secondary"))
+                # Delete links no longer in the list (one by one to trigger activity logging)
+                to_delete = existing_saved_metric_ids - new_saved_metric_ids
+                for saved_metric_id in to_delete:
+                    existing_links[saved_metric_id].delete()
 
-        # --- fingerprint recalculation -------------------------------------
-        start_date = update_data.get("start_date", experiment.start_date)
-        stats_config = update_data.get("stats_config", experiment.stats_config)
-        exposure_criteria = update_data.get("exposure_criteria", experiment.exposure_criteria)
-        only_count_matured_users = update_data.get("only_count_matured_users", experiment.only_count_matured_users)
-        new_parameters = update_data.get("parameters", experiment.parameters)
-        excluded_variants = (new_parameters or {}).get("excluded_variants")
+                # Update or create links
+                for saved_metric_data in saved_metrics_data:
+                    saved_metric_id = saved_metric_data["id"]
+                    new_metadata = saved_metric_data.get("metadata") or {}
 
-        for metric_field in ["metrics", "metrics_secondary"]:
-            metrics = update_data.get(metric_field, getattr(experiment, metric_field, None))
-            if metrics:
-                update_data[metric_field] = self._recompute_fingerprints(
-                    metrics,
-                    start_date,
-                    stats_config,
-                    exposure_criteria,
-                    only_count_matured_users=only_count_matured_users,
-                    excluded_variants=excluded_variants,
+                    if saved_metric_id in existing_links:
+                        existing_link = existing_links[saved_metric_id]
+                        if (existing_link.metadata or {}) != new_metadata:
+                            existing_link.metadata = new_metadata
+                            existing_link.save(update_fields=["metadata", "updated_at"])
+                    else:
+                        saved_metric_serializer = ExperimentToSavedMetricSerializer(
+                            data={
+                                "experiment": experiment.id,
+                                "saved_metric": saved_metric_id,
+                                "metadata": new_metadata,
+                            },
+                            context=context,
+                        )
+                        saved_metric_serializer.is_valid(raise_exception=True)
+                        saved_metric_serializer.save()
+
+            # --- validate updated fields ------------------------------------------
+            # Revalidate the baseline whenever either side of the constraint changes:
+            # the stats_config itself, or the variant set it references. A variants-only
+            # PATCH (e.g. updateDistribution) that renames/removes the current baseline
+            # must not leave a dangling baseline_variant_key behind.
+            update_variants = (update_data.get("parameters") or {}).get("feature_flag_variants")
+            if "stats_config" in update_data or update_variants is not None:
+                variant_keys = self._resolved_variant_keys(experiment, update_data)
+                effective_stats_config = update_data.get("stats_config", experiment.stats_config)
+                self.validate_stats_config(effective_stats_config, variant_keys)
+
+            # Defense-in-depth: only validate the inline metric lists this update
+            # is actually touching. Dedup-on-input has already made these lists
+            # unique; validating the stored arrays would block a soft-delete (or any
+            # other PATCH) on rows that pre-date the dedup logic.
+            if "metrics" in update_data or "metrics_secondary" in update_data:
+                self.validate_no_duplicate_metric_uuids(
+                    update_data.get("metrics"), update_data.get("metrics_secondary")
                 )
 
-        # --- metric ordering sync + validation -----------------------------
-        self._sync_ordering_with_metric_changes(experiment, update_data)
-        self._sync_ordering_for_saved_metrics_on_update(
-            experiment,
-            update_data,
-            old_saved_metric_uuids,
-            saved_metrics_data if update_saved_metrics else None,
-        )
-        self._validate_metric_ordering_on_update(experiment, update_data)
+            # --- fingerprint recalculation -------------------------------------
+            start_date = update_data.get("start_date", experiment.start_date)
+            stats_config = update_data.get("stats_config", experiment.stats_config)
+            exposure_criteria = update_data.get("exposure_criteria", experiment.exposure_criteria)
+            only_count_matured_users = update_data.get("only_count_matured_users", experiment.only_count_matured_users)
+            new_parameters = update_data.get("parameters", experiment.parameters)
+            excluded_variants = (new_parameters or {}).get("excluded_variants")
 
-        # --- feature flag activation on launch -----------------------------
-        has_start_date = update_data.get("start_date") is not None
-        if experiment.is_draft and has_start_date:
-            feature_flag.active = True
-            feature_flag.save()
+            for metric_field in ["metrics", "metrics_secondary"]:
+                metrics = update_data.get(metric_field, getattr(experiment, metric_field, None))
+                if metrics:
+                    update_data[metric_field] = self._recompute_fingerprints(
+                        metrics,
+                        start_date,
+                        stats_config,
+                        exposure_criteria,
+                        only_count_matured_users=only_count_matured_users,
+                        excluded_variants=excluded_variants,
+                    )
 
-        # --- running-time calculation dual-write ----------------------------
-        # During the parameters deprecation window, keep running_time_calculation and
-        # the legacy calculator keys in `parameters` in sync. `parameters` is replaced
-        # wholesale on update, so derive the counterpart from whichever side this
-        # update carries (running_time_calculation wins when both are sent).
-        if "running_time_calculation" in update_data:
-            update_data["parameters"] = self._merge_running_time_calculation_into_parameters(
-                update_data.get("parameters", experiment.parameters),
-                update_data["running_time_calculation"],
+            # --- metric ordering sync + validation -----------------------------
+            self._sync_ordering_with_metric_changes(experiment, update_data)
+            self._sync_ordering_for_saved_metrics_on_update(
+                experiment,
+                update_data,
+                old_saved_metric_uuids,
+                saved_metrics_data if update_saved_metrics else None,
             )
-        elif "parameters" in update_data:
-            update_data["running_time_calculation"] = self._running_time_calculation_from_parameters(
-                update_data["parameters"]
-            )
+            self._validate_metric_ordering_on_update(experiment, update_data)
 
-        # --- apply changes and save ----------------------------------------
-        for attr, value in update_data.items():
-            setattr(experiment, attr, value)
-        experiment.save()
+            # --- feature flag activation on launch -----------------------------
+            has_start_date = update_data.get("start_date") is not None
+            if experiment.is_draft and has_start_date:
+                feature_flag.active = True
+                feature_flag.save()
+
+            # --- running-time calculation dual-write ----------------------------
+            # During the parameters deprecation window, keep running_time_calculation and
+            # the legacy calculator keys in `parameters` in sync. `parameters` is replaced
+            # wholesale on update, so derive the counterpart from whichever side this
+            # update carries (running_time_calculation wins when both are sent).
+            if "running_time_calculation" in update_data:
+                update_data["parameters"] = self._merge_running_time_calculation_into_parameters(
+                    update_data.get("parameters", experiment.parameters),
+                    update_data["running_time_calculation"],
+                )
+            elif "parameters" in update_data:
+                update_data["running_time_calculation"] = self._running_time_calculation_from_parameters(
+                    update_data["parameters"]
+                )
+
+            # --- apply changes and save ----------------------------------------
+            for attr, value in update_data.items():
+                setattr(experiment, attr, value)
+            experiment.save()
 
         return experiment
+
+    def _sync_feature_flag_on_update(
+        self,
+        experiment: Experiment,
+        update_data: dict,
+        feature_flag: FeatureFlag,
+        context: dict,
+        update_feature_flag_params: bool,
+    ) -> None:
+        """Sync experiment parameters/holdout to the linked flag THROUGH the approval gate.
+
+        Draft experiments always sync parameters to the linked feature flag.
+        Running experiments only sync when update_feature_flag_params=True, to prevent
+        accidental side effects (e.g. overwrites when the frontend spreads stale
+        parameters alongside unrelated updates, or an agent calls MCP with too many
+        params).
+
+        Routing the write through FeatureFlagSerializer honours the @approval_gate, so a
+        policy-gated variant/rollout change raises ApprovalRequired. This runs OUTSIDE
+        update_experiment's atomic block (see the caller) so that raise leaves the
+        just-created pending ChangeRequest intact.
+        """
+        if not (experiment.is_draft or update_feature_flag_params):
+            return
+
+        holdout = experiment.holdout
+        if "holdout" in update_data:
+            holdout = update_data["holdout"]
+
+        if update_data.get("parameters"):
+            variants = update_data["parameters"].get("feature_flag_variants", [])
+            aggregation_group_type_index = update_data["parameters"].get("aggregation_group_type_index")
+
+            existing_groups = feature_flag.filters.get("groups", [])
+            experiment_rollout_percentage = update_data["parameters"].get("rollout_percentage")
+            if experiment_rollout_percentage is not None and existing_groups:
+                new_groups = [
+                    {**existing_groups[0], "rollout_percentage": experiment_rollout_percentage},
+                    *existing_groups[1:],
+                ]
+            else:
+                new_groups = list(existing_groups)
+
+            new_filters = {
+                **feature_flag.filters,
+                "groups": new_groups,
+                "multivariate": {"variants": variants or list(DEFAULT_VARIANTS)},
+                "aggregation_group_type_index": aggregation_group_type_index,
+                **holdout_filters_for_flag(holdout.id if holdout else None, holdout.filters if holdout else None),
+            }
+
+            existing_flag_serializer = FeatureFlagSerializer(
+                feature_flag,
+                data={"filters": new_filters},
+                partial=True,
+                context=context,
+            )
+            existing_flag_serializer.is_valid(raise_exception=True)
+            existing_flag_serializer.save()
+        elif "holdout" in update_data:
+            existing_flag_serializer = FeatureFlagSerializer(
+                feature_flag,
+                data={
+                    "filters": {
+                        **feature_flag.filters,
+                        **holdout_filters_for_flag(
+                            holdout.id if holdout else None, holdout.filters if holdout else None
+                        ),
+                    }
+                },
+                partial=True,
+                context=context,
+            )
+            existing_flag_serializer.is_valid(raise_exception=True)
+            existing_flag_serializer.save()
 
     def _validate_update_payload(self, experiment: Experiment, update_data: dict, feature_flag: FeatureFlag) -> None:
         """Validate update payload before any database mutations occur."""

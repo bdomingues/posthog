@@ -370,16 +370,10 @@ class TestExperimentBypassMatrix(APIBaseTest):
 
     def test_web_experiment_variant_rollout_edit_is_gated(self, _mock_enabled):
         # update_experiment() writes a variant/rollout change back through FeatureFlagSerializer.
-        # Review flagged this as newly-gating; the security invariant holds — it routes through
-        # feature_flag.update, raises ApprovalRequired, and leaves the flag's variants untouched.
-        #
-        # CAVEAT (documented finding): update_experiment is @transaction.atomic, so the
-        # ApprovalRequired raised inside serializer.save() unwinds the transaction and ALSO
-        # rolls back the ChangeRequest the gate created — unlike ship_variant/launch/pause/resume,
-        # which are deliberately non-atomic precisely so the pending CR persists. The change is
-        # correctly BLOCKED here, but no actionable pending request survives for an approver to act
-        # on. Asserting 0 pending (not 1) records the current behavior honestly; the fix is to make
-        # the flag write in update_experiment non-atomic like the other experiment transitions.
+        # It routes through feature_flag.update, raises ApprovalRequired, and leaves the flag's
+        # variants untouched. The gated flag write runs OUTSIDE update_experiment's atomic block
+        # (like ship_variant/launch/pause/resume), so the pending ChangeRequest the gate created
+        # survives for an approver to act on.
         experiment = self._launched("m-web")
         original_variants = experiment.feature_flag.filters["multivariate"]["variants"]
         self._policy("feature_flag.update")
@@ -408,9 +402,8 @@ class TestExperimentBypassMatrix(APIBaseTest):
         # Security invariant: the gated field is unchanged and nothing was applied.
         experiment.feature_flag.refresh_from_db()
         assert experiment.feature_flag.filters["multivariate"]["variants"] == original_variants
-        assert ChangeRequest.objects.filter(state=ChangeRequestState.APPLIED).count() == 0
-        # The CR is rolled back with the atomic transaction (see CAVEAT above).
-        assert ChangeRequest.objects.filter(state=ChangeRequestState.PENDING).count() == 0
+        # The gated flag write runs outside the atomic block, so the pending CR survives.
+        self._assert_pending_zero_applied()
 
 
 @patch("posthog.approvals.decorators._is_approvals_enabled", return_value=True)

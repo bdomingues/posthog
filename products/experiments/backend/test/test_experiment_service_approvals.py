@@ -6,7 +6,7 @@ from unittest.mock import patch
 from rest_framework.test import APIRequestFactory
 
 from posthog.approvals.exceptions import ApprovalRequired
-from posthog.approvals.models import ApprovalPolicy
+from posthog.approvals.models import ApprovalPolicy, ChangeRequest, ChangeRequestState
 from posthog.constants import AvailableFeature
 
 from products.experiments.backend.experiment_service import ExperimentService
@@ -167,3 +167,36 @@ class TestExperimentServiceApprovals(APIBaseTest):
         # Flag distribution unchanged and experiment not ended.
         assert experiment.feature_flag.filters["multivariate"]["variants"] == original_variants
         assert experiment.end_date is None
+
+    def test_update_experiment_variant_edit_under_update_policy_leaves_pending_cr(self, _mock_enabled):
+        # update_experiment() syncs a variant/rollout change back through FeatureFlagSerializer,
+        # gated by feature_flag.update. The gated flag write runs OUTSIDE the method's atomic block
+        # (like ship_variant/launch/pause/resume), so ApprovalRequired leaves the flag untouched
+        # AND the pending ChangeRequest survives for an approver to act on — it is not rolled back.
+        experiment = self._create_launched_experiment("update-gated")
+        original_variants = experiment.feature_flag.filters["multivariate"]["variants"]
+        self._create_update_policy()
+
+        new_variants = [
+            {"key": "control", "rollout_percentage": 10},
+            {"key": "test", "rollout_percentage": 90},
+        ]
+        context = {
+            "request": self._request(),
+            "team_id": self.team.id,
+            "project_id": self.team.project_id,
+            "get_team": lambda: self.team,
+            "get_organization": lambda: self.organization,
+        }
+
+        with self.assertRaises(ApprovalRequired):
+            self._service().update_experiment(
+                experiment,
+                {"parameters": {"feature_flag_variants": new_variants}, "update_feature_flag_params": True},
+                serializer_context=context,
+            )
+
+        experiment.feature_flag.refresh_from_db()
+        assert experiment.feature_flag.filters["multivariate"]["variants"] == original_variants
+        assert ChangeRequest.objects.filter(state=ChangeRequestState.PENDING).count() == 1
+        assert ChangeRequest.objects.filter(state=ChangeRequestState.APPLIED).count() == 0
