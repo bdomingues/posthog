@@ -14,6 +14,7 @@ from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 from dateutil.relativedelta import relativedelta
 from prometheus_client import Counter
 
+from posthog.approvals.scheduled_changes import apply_gated_scheduled_change, regate_recurring_scheduled_change
 from posthog.exceptions_capture import capture_exception
 
 from products.feature_flags.backend.models.feature_flag import FeatureFlag
@@ -189,9 +190,18 @@ def process_scheduled_changes() -> None:
                     # Execute the change on the model instance
                     model = models[scheduled_change.model_name]
                     instance = model.objects.get(id=scheduled_change.record_id, team_id=scheduled_change.team_id)
-                    instance.scheduled_changes_dispatcher(
-                        scheduled_change.payload, scheduled_change.created_by, scheduled_change_id=scheduled_change.id
-                    )
+
+                    # Approval-aware dispatch: a scheduled change whose payload flips a policy-gated
+                    # field carries a bound ChangeRequest created at scheduling time. We only apply
+                    # it through the approved path once that CR is approved; if it is still pending
+                    # when the fire window closes, the CR is expired and the change is skipped. An
+                    # unbound (ungated) change dispatches through the serializer as before.
+                    if apply_gated_scheduled_change(scheduled_change):
+                        instance.scheduled_changes_dispatcher(
+                            scheduled_change.payload,
+                            scheduled_change.created_by,
+                            scheduled_change_id=scheduled_change.id,
+                        )
 
                     # Handle recurring vs one-time schedules.
                     # A recurring schedule uses either a cron expression or a fixed recurrence interval.
@@ -260,6 +270,11 @@ def process_scheduled_changes() -> None:
                         else:
                             scheduled_change.scheduled_at = next_run
                             scheduled_change.last_executed_at = now
+                            # A bound ChangeRequest is single-use; the next occurrence needs its own
+                            # approval. Re-gate against the flag's current state and rebind (None when
+                            # no policy now applies, so the next fire dispatches ungated).
+                            if scheduled_change.change_request_id is not None:
+                                scheduled_change.change_request = regate_recurring_scheduled_change(scheduled_change)
                             scheduled_change.save()
                     else:
                         # One-time schedule: mark as completed

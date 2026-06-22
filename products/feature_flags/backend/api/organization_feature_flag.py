@@ -12,6 +12,7 @@ from posthog.api.documentation import _FallbackSerializer, extend_schema
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.api.shared import UserBasicSerializer
 from posthog.api.utils import action
+from posthog.approvals.scheduled_changes import gate_scheduled_change
 from posthog.models import Team
 from posthog.models.filters.filter import Filter
 from posthog.user_permissions import UserPermissions
@@ -382,6 +383,10 @@ class OrganizationFeatureFlagView(
             # Remap cohort IDs in schedule payload
             updated_payload = self._remap_cohort_ids_in_payload(schedule.payload, cohort_mapping, cohort_cache)
 
+            # Gate the copied schedule against the target flag's policies, same as a directly
+            # created schedule — a copy that would enable/roll out a flag still needs approval.
+            change_request = gate_scheduled_change(target_flag, updated_payload, user)
+
             ScheduledChange.objects.create(
                 record_id=str(target_flag.id),
                 model_name=ScheduledChange.AllowedModels.FEATURE_FLAG,
@@ -392,6 +397,7 @@ class OrganizationFeatureFlagView(
                 end_date=schedule.end_date,
                 team=target_flag.team,
                 created_by=user,
+                change_request=change_request,
             )
 
     def _remap_cohort_ids_in_payload(self, payload, cohort_mapping, cohort_cache):

@@ -10,9 +10,35 @@ from rest_framework.exceptions import PermissionDenied
 
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.api.shared import UserBasicSerializer
+from posthog.approvals.models import ChangeRequest
+from posthog.approvals.scheduled_changes import gate_scheduled_change
 
 from products.feature_flags.backend.api.feature_flag import CanEditFeatureFlag
+from products.feature_flags.backend.models.feature_flag import FeatureFlag
 from products.feature_flags.backend.models.scheduled_change import ScheduledChange
+
+
+def _gate_scheduled_change_at_creation(
+    model_name: str | None,
+    record_id: Any,
+    team_id: int,
+    payload: dict,
+    user: Any,
+) -> ChangeRequest | None:
+    """Create a pending ChangeRequest if a scheduled change targets a policy-gated field.
+
+    Returns the CR to bind to the new ScheduledChange, or None when no policy applies (the
+    common case). Only feature-flag schedules are gated; a missing target flag is left to the
+    existing edit-permission check, which already validates the flag exists.
+    """
+    if model_name != ScheduledChange.AllowedModels.FEATURE_FLAG or not record_id:
+        return None
+
+    flag = FeatureFlag.objects.filter(id=record_id, team_id=team_id).first()
+    if flag is None:
+        return None
+
+    return gate_scheduled_change(flag, payload, user)
 
 
 class ScheduledChangeSerializer(serializers.ModelSerializer):
@@ -214,6 +240,17 @@ class ScheduledChangeSerializer(serializers.ModelSerializer):
         # wall-clock fields in that timezone, independent of later team.timezone changes.
         team = self.context["get_team"]()
         validated_data["timezone"] = team.timezone
+
+        # Gate at scheduling time: if the change would flip a policy-gated field, create a pending
+        # ChangeRequest now and bind it so the applier only applies once approved (see
+        # process_scheduled_changes). NULL change_request means no policy applies — apply as before.
+        validated_data["change_request"] = _gate_scheduled_change_at_creation(
+            validated_data.get("model_name"),
+            validated_data.get("record_id"),
+            validated_data["team_id"],
+            validated_data.get("payload", {}),
+            validated_data["created_by"],
+        )
 
         return super().create(validated_data)
 
