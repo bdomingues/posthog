@@ -255,9 +255,9 @@ def _entry_breakdown_value_expr(runner: "WebStatsTableQueryRunner") -> ast.Expr:
 # that never reach the display — is pure dead weight. On a high-cardinality team the
 # top ~1k cleaned paths already cover ~98% of pageviews, so a generous K is lossless
 # for the display while shrinking the stored set by orders of magnitude. K is large
-# enough to absorb pagination and the sub-range-read case (a job window wider than
-# the read's) — a path displayable in any sub-range is virtually always within the
-# job's top-K.
+# enough to absorb pagination; the sub-range-read case (a job window wider than the
+# read's) is handled exactly by capping per day rather than per job window — see
+# `INSERT_QUERY_TEMPLATE_CAPPED`.
 PATHS_TOP_K = 10000
 
 # The per-(hour, breakdown) state aggregation — shared by the capped and uncapped
@@ -314,13 +314,19 @@ GROUP BY time_window_start, breakdown_value
 # Uncapped insert — current behaviour, used for ASC sorts (see `_top_k_ranking_expr`).
 INSERT_QUERY_TEMPLATE = _PER_WINDOW_AGG_SQL
 
-# Capped insert — keep only the top-K `breakdown_value`s by `{top_k_metric}` (the
-# query's sort metric, merged over the job's window), then store all their per-hour
-# rows. `{top_k_metric}` is in the AST so the sort dimension joins the job hash —
-# each sort variant gets its own correctly-capped job. NOTE: `per_window` is
-# referenced twice, so ClickHouse re-evaluates the events aggregation once for the
-# top-K selection and once for the output; acceptable for the background insert, a
-# candidate for a single-pass window-function rewrite if it proves too heavy.
+# Capped insert — keep the top-K `breakdown_value`s by `{top_k_metric}` (the query's
+# sort metric) computed PER DAY, then store all per-hour rows for any path that reaches
+# a day's top-K. Capping per day (not over the whole job window) is what keeps the cap
+# correct for sub-range reads: the read path decomposes a request into daily windows and
+# can serve any one of them from a wider covering job (`filter_overlapping_jobs` in the
+# lazy executor), so a path on a single day's first page must be stored even if it falls
+# outside the job window's overall top-K. `row_number() OVER (PARTITION BY day …)` ranks
+# within each day; `<= K` keeps the union of daily top-Ks. (HogQL parses `LIMIT n BY` but
+# the printer can't emit it, so we rank with a window function instead.) `{top_k_metric}`
+# is in the AST so the sort dimension joins the job hash — each sort variant gets its own
+# correctly-capped job. NOTE: `per_window` is referenced twice, so ClickHouse re-evaluates
+# the events aggregation once for the top-K selection and once for the output; acceptable
+# for the background insert, a candidate for a single-pass rewrite if it proves too heavy.
 INSERT_QUERY_TEMPLATE_CAPPED = (
     "WITH per_window AS ("
     + _PER_WINDOW_AGG_SQL
@@ -333,12 +339,26 @@ SELECT
     avg_bounce_state AS avg_bounce_state
 FROM per_window
 WHERE breakdown_value IN (
-    SELECT breakdown_value FROM per_window
-    GROUP BY breakdown_value
-    ORDER BY {top_k_metric} DESC, breakdown_value ASC
-    LIMIT """
+    SELECT breakdown_value FROM (
+        SELECT
+            breakdown_value AS breakdown_value,
+            row_number() OVER (
+                PARTITION BY day_bucket
+                ORDER BY day_rank_metric DESC, breakdown_value ASC
+            ) AS day_rank
+        FROM (
+            SELECT
+                toStartOfDay(time_window_start) AS day_bucket,
+                breakdown_value AS breakdown_value,
+                {top_k_metric} AS day_rank_metric
+            FROM per_window
+            GROUP BY day_bucket, breakdown_value
+        )
+    )
+    WHERE day_rank <= """
     + str(PATHS_TOP_K)
-    + "\n)"
+    + """
+)"""
 )
 
 

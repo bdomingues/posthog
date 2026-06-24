@@ -1,4 +1,5 @@
 import uuid
+import dataclasses
 
 import unittest
 from freezegun import freeze_time
@@ -460,6 +461,47 @@ class TestWebStatsPathsLazyPrecompute(ClickhouseTestMixin, APIBaseTest):
         assert isinstance(parsed, ast.SelectQuery)
         assert parsed.select and all(isinstance(e, ast.Alias) for e in parsed.select), (
             "capped insert top-level columns must all be aliased for _build_manual_insert_sql"
+        )
+
+    def test_capped_insert_caps_per_day_not_per_window(self):
+        # The cap must be computed PER DAY, not over the whole job window. The read path
+        # decomposes a request into daily windows and can serve one of them from a wider
+        # covering job (`filter_overlapping_jobs`), so a path on a single day's top-K must
+        # be stored even if it falls outside the job window's overall top-K — a per-window
+        # cap silently drops it. Guards against a revert to per-window capping.
+        runner = WebStatsTableQueryRunner(team=self.team, query=self._build_query())
+        placeholders: dict = {
+            "events_session_id": _events_session_id_expr(runner),
+            "breakdown_value_expr": _breakdown_value_expr(runner),
+            "entry_breakdown_value_expr": _entry_breakdown_value_expr(runner),
+            "event_type_filter": runner.event_type_expr,
+            "user_filter": host_filter_expr(runner.query.properties or [], team=runner.team),
+            "test_account_filter": _test_account_filter_expr(
+                test_account_filters=runner._test_account_filters, team=runner.team
+            ),
+            "pad_minutes": ast.Constant(value=SESSION_FORWARD_PAD_MINUTES),
+            "top_k_metric": _top_k_ranking_expr(runner),
+            "time_window_min": ast.Constant(value="__MIN__"),
+            "time_window_max": ast.Constant(value="__MAX__"),
+        }
+        parsed = parse_select(INSERT_QUERY_TEMPLATE_CAPPED, placeholders=placeholders)
+
+        windows: list = []
+
+        def walk(node):
+            if isinstance(node, ast.WindowExpr) and node.partition_by:
+                windows.append(node)
+            if dataclasses.is_dataclass(node) and not isinstance(node, type):
+                for f in dataclasses.fields(node):
+                    walk(getattr(node, f.name, None))
+            elif isinstance(node, list | tuple):
+                for item in node:
+                    walk(item)
+
+        walk(parsed)
+        assert windows, "capped insert must rank per day with a windowed row_number(), found no PARTITION BY"
+        assert any("day_bucket" in str(w.partition_by) for w in windows), (
+            f"the top-K cap must partition by the day bucket, got: {[w.partition_by for w in windows]}"
         )
 
     @freeze_time("2024-01-15T12:00:00Z")
