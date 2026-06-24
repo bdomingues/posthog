@@ -68,3 +68,28 @@ class TestGroupsJoinPrefilter(APIBaseTest):
     def test_skips_filter_when_outer_has_no_where(self):
         sql = self._print("SELECT group_0.properties FROM events")
         self.assertNotIn("in(key,", sql)
+
+    def test_skips_filter_when_outer_where_references_lazy_join(self):
+        # Cloning a WHERE that references a lazy-join column (e.g. `group_0.properties.X`)
+        # into the inner `SELECT $group_N FROM events ...` subquery would re-trigger the
+        # same lazy join inside that inner subquery during resolution — producing unbounded
+        # recursion or a `ResolutionError`. The guard skips the optimization in that case;
+        # the outer group join still resolves and prints normally, just without the key
+        # prefilter pushed into its WHERE.
+        sql = self._print(
+            "SELECT group_0.properties FROM events "
+            "WHERE group_0.properties.industry = 'tech' "
+            "AND timestamp > toDateTime('2026-01-01')"
+        )
+        self.assertIn("events__group_0", sql)
+        self.assertNotIn("in(key,", sql)
+
+    def test_skips_filter_when_outer_where_references_person_lazy_join(self):
+        # Same recursive-resolution risk for `person.*` references on the events table.
+        sql = self._print(
+            "SELECT group_0.properties FROM events "
+            "WHERE person.properties.plan = 'pro' "
+            "AND timestamp > toDateTime('2026-01-01')"
+        )
+        self.assertIn("events__group_0", sql)
+        self.assertNotIn("in(key,", sql)

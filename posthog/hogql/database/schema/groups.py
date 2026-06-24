@@ -106,19 +106,59 @@ def join_with_group_n_table(
     return join_expr
 
 
+# Aliases on the events table that resolve to lazy joins or traversers. If the outer WHERE
+# references any of these (e.g. `WHERE group_0.properties.X = 'Y'`, `WHERE person.id = ...`),
+# cloning that WHERE into the inner `SELECT $group_N FROM events WHERE ...` subquery would
+# carry the typed `Field` for the lazy join, and the resolver would recursively try to
+# resolve the same lazy join inside our inner subquery — producing unbounded recursion or a
+# `ResolutionError: Select query must have a type`. Skip the optimization in that case;
+# we'd rather pay the original groups-hash-table cost than crash.
+EVENTS_LAZY_JOIN_ALIASES = frozenset(
+    {
+        "person",
+        "person_id",
+        "pdi",
+        "poe",
+        "group_0",
+        "group_1",
+        "group_2",
+        "group_3",
+        "group_4",
+        "goe_0",
+        "goe_1",
+        "goe_2",
+        "goe_3",
+        "goe_4",
+        "session",
+        "revenue_analytics",
+    }
+)
+
+
 def _outer_events_prefilter(node: SelectQuery):
     """
     Extract a clone of the outer query's WHERE that we can safely embed inside the groups
-    join subquery. We only return it when it references the `timestamp` field — that's the
-    cheap heuristic for "the matched event set is bounded by a date range." Without that
-    guard, a query whose WHERE is only `team_id = X` (or empty) would push a key subquery
-    that scans every event for the team, which is strictly worse than no filter at all.
+    join subquery. We only return it when:
+
+    1. It references the `timestamp` field — cheap heuristic for "the matched event set is
+       bounded by a date range." Without that guard, a query whose WHERE is only
+       `team_id = X` (or empty) would push a key subquery that scans every event for the
+       team, which is strictly worse than no filter at all.
+    2. It does not reference any lazy-join alias on the events table. Cloning a
+       `group_N.X` / `person.X` reference into the inner subquery would re-trigger the
+       resolver on the same lazy join during inner-subquery resolution.
     """
+    from posthog.hogql.transforms.lazy_tables import find_field_chains
 
     where = node.where
     if where is None:
         return None
     if not _references_timestamp(where):
+        return None
+    if any(
+        chain and isinstance(chain[0], str) and chain[0] in EVENTS_LAZY_JOIN_ALIASES
+        for chain in find_field_chains(where)
+    ):
         return None
     return clone_expr(where)
 
