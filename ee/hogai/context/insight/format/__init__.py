@@ -58,21 +58,45 @@ def get_boxplot_results(response: dict[str, Any]) -> list[Any]:
     return results if results else response.get("boxplot_data", [])
 
 
-def format_warehouse_sync_warnings(response: dict[str, Any]) -> str:
-    """Render data warehouse sync warnings as a leading block for LLM-facing output.
+def _warning_field(warning: Any, field: str) -> Any:
+    return warning.get(field) if isinstance(warning, dict) else getattr(warning, field, None)
 
-    Returns empty string when the response has no warnings.
-    """
-    warnings = response.get("warnings") or []
-    if not warnings:
-        return ""
-    lines = ["[Data warehouse sync warnings — results may not reflect current source data]"]
+
+def _format_warning_block(warnings: list[Any], header: str) -> str:
+    lines = [header]
     for warning in warnings:
-        message = warning.get("message") if isinstance(warning, dict) else getattr(warning, "message", None)
+        message = _warning_field(warning, "message")
         if message:
             lines.append(f"- {message}")
+    if len(lines) == 1:  # header only, no messages
+        return ""
     lines.append("")
     return "\n".join(lines)
+
+
+def format_warehouse_sync_warnings(response: dict[str, Any]) -> str:
+    """Render data warehouse sync warnings from the shared `warnings` field as a leading block.
+
+    Returns empty string when no sync warnings are present.
+    """
+    # The shared field also carries access control warnings; pick out the sync ones by shape.
+    warnings = [w for w in (response.get("warnings") or []) if _warning_field(w, "table_name") is not None]
+    return _format_warning_block(
+        warnings, "[Data warehouse sync warnings — results may not reflect current source data]"
+    )
+
+
+def format_access_control_warnings(response: dict[str, Any]) -> str:
+    """Render object-level access control warnings from the shared `warnings` field as a leading block.
+
+    Filtering is pushed into SQL, so excluded rows never come back. Without this block an agent
+    can mistake an access-filtered partial result for the full set. Returns empty string when
+    nothing was excluded.
+    """
+    warnings = [w for w in (response.get("warnings") or []) if _warning_field(w, "resource") is not None]
+    return _format_warning_block(
+        warnings, "[Access control — this is a partial result set; rows you don't have access to were excluded]"
+    )
 
 
 def format_query_results_for_llm(
@@ -125,7 +149,7 @@ def format_query_results_for_llm(
 
     if formatted is None:
         return None
-    warning_prefix = format_warehouse_sync_warnings(response)
+    warning_prefix = format_warehouse_sync_warnings(response) + format_access_control_warnings(response)
     return warning_prefix + formatted if warning_prefix else formatted
 
 
@@ -143,6 +167,7 @@ __all__ = [
     "RevenueAnalyticsMRRResultsFormatter",
     "RevenueAnalyticsTopCustomersResultsFormatter",
     "TRUNCATED_MARKER",
+    "format_access_control_warnings",
     "format_query_results_for_llm",
     "format_warehouse_sync_warnings",
 ]
