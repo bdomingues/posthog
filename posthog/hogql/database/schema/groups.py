@@ -16,6 +16,7 @@ from posthog.hogql.database.models import (
 )
 from posthog.hogql.database.schema.groups_revenue_analytics import GroupsRevenueAnalyticsTable
 from posthog.hogql.errors import ResolutionError
+from posthog.hogql.visitor import TraversingVisitor, clone_expr
 
 GROUPS_TABLE_FIELDS: dict[str, FieldOrTable] = {
     "index": IntegerDatabaseField(name="group_type_index", nullable=False),
@@ -64,6 +65,32 @@ def join_with_group_n_table(
         right=ast.Constant(value=group_index),
     )
 
+    # If the outer query has a bounded prefilter on `events` (one that references `timestamp` —
+    # which is the strongest signal we have that the matched set is small), push an additional
+    # `group_key IN (SELECT $group_N FROM events WHERE <outer prefilter>)` predicate into the
+    # groups subquery. Without this filter, the LEFT JOIN materializes a hash table containing
+    # every group of this type for the team, decompressing the (very wide) `group_properties`
+    # blob row by row — on high-volume teams that's enough to OOM the whole query even when
+    # only a handful of events are actually being selected. With the filter, the hash table is
+    # bounded by the distinct `$group_N` values present in the matched events.
+    events_prefilter = _outer_events_prefilter(node)
+    if events_prefilter is not None:
+        key_subquery = ast.SelectQuery(
+            select=[ast.Field(chain=[f"$group_{group_index}"])],
+            select_from=ast.JoinExpr(table=ast.Field(chain=["events"])),
+            where=events_prefilter,
+        )
+        select_query.where = ast.And(
+            exprs=[
+                select_query.where,
+                ast.CompareOperation(
+                    op=ast.CompareOperationOp.In,
+                    left=ast.Field(chain=["key"]),
+                    right=key_subquery,
+                ),
+            ]
+        )
+
     join_expr = ast.JoinExpr(table=select_query)
     join_expr.join_type = "LEFT JOIN"
     join_expr.alias = join_to_add.to_table
@@ -77,6 +104,41 @@ def join_with_group_n_table(
     )
 
     return join_expr
+
+
+def _outer_events_prefilter(node: SelectQuery):
+    """
+    Extract a clone of the outer query's WHERE that we can safely embed inside the groups
+    join subquery. We only return it when it references the `timestamp` field — that's the
+    cheap heuristic for "the matched event set is bounded by a date range." Without that
+    guard, a query whose WHERE is only `team_id = X` (or empty) would push a key subquery
+    that scans every event for the team, which is strictly worse than no filter at all.
+    """
+
+    where = node.where
+    if where is None:
+        return None
+    if not _references_timestamp(where):
+        return None
+    return clone_expr(where)
+
+
+class _TimestampReferenceFinder(TraversingVisitor):
+    """Walks an expression to see whether it touches the `timestamp` field."""
+
+    def __init__(self):
+        super().__init__()
+        self.found = False
+
+    def visit_field(self, node):
+        if node.chain and node.chain[-1] == "timestamp":
+            self.found = True
+
+
+def _references_timestamp(expr) -> bool:
+    finder = _TimestampReferenceFinder()
+    finder.visit(expr)
+    return finder.found
 
 
 class RawGroupsTable(Table):

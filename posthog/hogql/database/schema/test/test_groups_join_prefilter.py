@@ -1,0 +1,70 @@
+from datetime import UTC, datetime
+
+from posthog.test.base import APIBaseTest
+
+from posthog.hogql.context import HogQLContext
+from posthog.hogql.database.database import Database
+from posthog.hogql.parser import parse_select
+from posthog.hogql.printer import prepare_and_print_ast
+
+from posthog.models import GroupTypeMapping
+from posthog.models.group_type_mapping import invalidate_group_types_cache
+
+
+class TestGroupsJoinPrefilter(APIBaseTest):
+    """
+    Each `LEFT JOIN groups` subquery generated for `group_N.<field>` access should also be
+    constrained by `group_key IN (SELECT $group_N FROM events WHERE <outer prefilter>)` when
+    the outer query has a `timestamp`-bounded WHERE. Without that constraint the join hash
+    table contains every group of that type for the team, decompressing the wide
+    `group_properties` blob row-by-row — enough to OOM the query on a high-volume team even
+    when only a handful of events are actually selected.
+
+    The optimization is gated on `timestamp` appearing in the outer WHERE, so unbounded
+    queries (no WHERE, or WHERE without a date range) still go through the original path.
+    """
+
+    def setUp(self):
+        super().setUp()
+        GroupTypeMapping.objects.create(
+            team=self.team,
+            project=self.team.project,
+            group_type="company",
+            group_type_index=0,
+            created_at=datetime(2020, 1, 1, tzinfo=UTC),
+        )
+        invalidate_group_types_cache(self.team.project_id)
+        self.database = Database.create_for(team=self.team)
+        self.context = HogQLContext(team=self.team, database=self.database, enable_select_queries=True)
+
+    def _print(self, query: str) -> str:
+        sql, _ = prepare_and_print_ast(parse_select(query), context=self.context, dialect="clickhouse")
+        return sql
+
+    def test_pushes_group_key_filter_when_outer_where_has_timestamp(self):
+        sql = self._print("SELECT group_0.properties FROM events WHERE timestamp > toDateTime('2026-01-01') LIMIT 10")
+        # Groups subquery now constrains group_key to the keys present in the matched events.
+        self.assertIn("in(key,", sql)
+        self.assertIn("SELECT events.`$group_0`", sql)
+        self.assertIn("FROM events", sql)
+
+    def test_pushes_group_key_filter_with_uuid_and_timestamp_where(self):
+        # Mirrors the prod test-event-fetch shape: uuid set plus a tight timestamp window.
+        sql = self._print(
+            "SELECT group_0.properties FROM events "
+            "WHERE uuid IN ('019ef62f-21be-7867-9939-e0723c27efc2') "
+            "AND timestamp > toDateTime('2026-06-23 02:48:28') "
+            "AND timestamp < toDateTime('2026-06-23 13:32:26')"
+        )
+        self.assertIn("in(key,", sql)
+        self.assertIn("SELECT events.`$group_0`", sql)
+
+    def test_skips_filter_when_outer_where_lacks_timestamp(self):
+        # No timestamp reference → the optimization would push a key subquery that scans every
+        # event for the team, which is strictly worse than no filter. Guard skips it.
+        sql = self._print("SELECT group_0.properties FROM events WHERE event = '$pageview'")
+        self.assertNotIn("in(key,", sql)
+
+    def test_skips_filter_when_outer_has_no_where(self):
+        sql = self._print("SELECT group_0.properties FROM events")
+        self.assertNotIn("in(key,", sql)
