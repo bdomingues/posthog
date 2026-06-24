@@ -35,6 +35,18 @@ export function ScoutRowCard({
     const { closeSetupModal } = useActions(agentSetupModalLogic)
     const displayName = prettifyScoutSkillName(config.skill_name)
 
+    // What the scout investigates, from the skill frontmatter — surfaced on hover over the name.
+    // Keep the "view scout" hint underneath so the link affordance survives the richer tooltip.
+    const description = config.description?.trim()
+    const nameTooltip = description ? (
+        <div className="flex flex-col gap-0.5">
+            <span>{description}</span>
+            <span className="text-muted">{config.skill_name} · view scout</span>
+        </div>
+    ) : (
+        `${config.skill_name} · view scout`
+    )
+
     return (
         <div
             className={clsx(
@@ -51,9 +63,11 @@ export function ScoutRowCard({
                         {asHeader ? (
                             // min-w keeps the name from being squeezed to zero width by the
                             // trailing badges — truncate should clip to an ellipsis, never vanish.
-                            <span className="truncate font-medium text-sm min-w-[6rem]">{displayName}</span>
+                            <Tooltip title={description}>
+                                <span className="truncate font-medium text-sm min-w-[6rem]">{displayName}</span>
+                            </Tooltip>
                         ) : (
-                            <Tooltip title={`${config.skill_name} · view scout`}>
+                            <Tooltip title={nameTooltip}>
                                 <Link
                                     to={urls.inboxScout(config.skill_name)}
                                     // The fleet list lives in the setup modal, which portals outside the
