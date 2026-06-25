@@ -6,6 +6,10 @@ from semantic_version import Version
 FROZEN_POSTHOG_VERSION = Version("1.43.0")  # Frozen at the last self-hosted version, just for backwards compat now
 INTERNAL_BOT_EMAIL_SUFFIX = "@posthogbot.user"
 
+# PostHog's own internal support project (US cloud). Support tickets and ticket-based
+# "login as customer" impersonation are scoped to this team.
+POSTHOG_INTERNAL_TEAM_ID = 2
+
 
 # N.B. Keep this in sync with frontend enum (types.ts)
 # AND ensure it is added to the Billing Service

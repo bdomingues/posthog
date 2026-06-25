@@ -25,6 +25,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from posthog.auth import WidgetAuthentication
+from posthog.constants import POSTHOG_INTERNAL_TEAM_ID
 from posthog.event_usage import report_team_action
 from posthog.exceptions_capture import capture_exception
 from posthog.models import Team
@@ -52,10 +53,6 @@ from products.conversations.backend.models.constants import ChannelDetail
 from products.conversations.backend.services.identity import verify_identity_hash
 
 logger = logging.getLogger(__name__)
-
-# PostHog's internal US support project. Tickets here can carry a region trait so
-# staff can be routed to the right region when logging in as the customer.
-POSTHOG_INTERNAL_TEAM_ID = 2
 
 _REGION_BY_SUBDOMAIN = {"us": "US", "eu": "EU"}
 

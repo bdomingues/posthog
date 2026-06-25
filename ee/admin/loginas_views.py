@@ -11,6 +11,7 @@ import posthoganalytics
 from loginas.utils import is_impersonated_session
 from loginas.views import user_login as loginas_user_login
 
+from posthog.constants import POSTHOG_INTERNAL_TEAM_ID
 from posthog.helpers.impersonation import get_original_user_from_session
 from posthog.middleware import (
     IMPERSONATION_READ_ONLY_SESSION_KEY,
@@ -18,10 +19,6 @@ from posthog.middleware import (
     is_read_only_impersonation,
 )
 from posthog.models import User
-
-# Support tickets only live on PostHog's internal US project, so ticket-based
-# impersonation is always resolved against this team.
-POSTHOG_INTERNAL_TEAM_ID = 2
 
 REGION_DOMAINS: dict[str, str] = {
     "US": "us.posthog.com",
@@ -79,7 +76,9 @@ def loginas_user(request, user_id):
     staff_user = request.user
     response = loginas_user_login(request, user_id)
 
-    target_user = User.objects.filter(id=user_id).first()
+    # Only resolve the target user once impersonation actually started — avoids a
+    # needless query when loginas_user_login rejected the request.
+    target_user = User.objects.filter(id=user_id).first() if is_impersonated_session(request) else None
     _configure_impersonation_session(
         request,
         staff_user,

@@ -95,11 +95,10 @@ def logout(request):
         ticket_id = request.session.get(IMPERSONATION_TICKET_ID_SESSION_KEY)
         restore_original_login(request)
         # When the session was started from a support ticket, land staff back on
-        # that ticket rather than the Django admin user page.
+        # that ticket rather than the Django admin user page. ticket_id is a
+        # server-stored UUID, so this is always a safe relative path.
         if ticket_id:
-            ticket_url = f"/support/tickets/{ticket_id}"
-            if url_has_allowed_host_and_scheme(ticket_url, allowed_hosts=None):
-                return redirect(ticket_url)
+            return redirect(f"/support/tickets/{ticket_id}")
         return redirect(f"/admin/posthog/user/{impersonated_user_pk}/change/")
 
     auth_logout(request)
