@@ -1,4 +1,4 @@
-import { ReactNode, useId, useState } from 'react'
+import { ReactNode, useEffect, useId, useState } from 'react'
 
 import { LemonButton, LemonInput, LemonModal, SideAction } from '@posthog/lemon-ui'
 
@@ -7,6 +7,7 @@ export interface ImpersonationReasonModalCancelButton {
     status?: 'default' | 'danger'
     onClick: () => void
     sideAction?: SideAction
+    loading?: boolean
 }
 
 export interface ImpersonationReasonModalProps {
@@ -17,6 +18,8 @@ export interface ImpersonationReasonModalProps {
     description?: string
     confirmText?: string
     loading?: boolean
+    // Pre-fills the reason field each time the modal opens (e.g. the ticket being investigated).
+    defaultReason?: string
     children?: ReactNode
     cancelButton?: ImpersonationReasonModalCancelButton
     // Forced-choice modals (e.g. session-expired) set closable={false} so the user
@@ -34,20 +37,29 @@ export function ImpersonationReasonModal({
     description,
     confirmText = 'Confirm',
     loading = false,
+    defaultReason = '',
     children,
     cancelButton,
     closable = true,
     inline = false,
 }: ImpersonationReasonModalProps): JSX.Element {
-    const [reason, setReason] = useState('')
+    const [reason, setReason] = useState(defaultReason)
     const reasonInputId = useId()
+
+    // The upgrade modal stays mounted and is toggled via isOpen, so seed the field
+    // on each open rather than only at first mount.
+    useEffect(() => {
+        if (isOpen) {
+            setReason(defaultReason)
+        }
+    }, [isOpen, defaultReason])
 
     const handleConfirm = (): void => {
         onConfirm(reason)
     }
 
     const handleClose = (): void => {
-        setReason('')
+        setReason(defaultReason)
         onClose?.()
     }
 
@@ -71,6 +83,7 @@ export function ImpersonationReasonModal({
                             status={cancel.status}
                             onClick={cancel.onClick}
                             sideAction={cancel.sideAction}
+                            loading={cancel.loading}
                         >
                             {cancel.label}
                         </LemonButton>

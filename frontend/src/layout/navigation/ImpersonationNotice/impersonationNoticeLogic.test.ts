@@ -39,6 +39,9 @@ describe('impersonationNoticeLogic', () => {
     let logic: ReturnType<typeof impersonationNoticeLogic.build>
 
     beforeEach(() => {
+        // returnToTicketContext is a persisted reducer; clear storage so a value set
+        // in one test doesn't leak into the next.
+        localStorage.clear()
         useMocks({
             get: {
                 '/api/users/@me/': () => [200, MOCK_DEFAULT_USER],
@@ -186,6 +189,173 @@ describe('impersonationNoticeLogic', () => {
                 .toMatchValues({ isInitiatingImpersonation: false })
 
             expect(lemonToast.error).not.toHaveBeenCalled()
+        })
+
+        it('persists the return-to-ticket context on the same-region success path', async () => {
+            logic.actions.setTicketContext({
+                ticketId: TICKET_ID,
+                ticketNumber: 42,
+                email: 'a@example.com',
+                region: Region.US,
+            })
+            useMocks({
+                get: { '/admin/auth_check': () => [200, {}] },
+                post: {
+                    '/admin/impersonation/from-ticket/': () => [200, { success: true, ticket_id: TICKET_ID }],
+                },
+            })
+            const originalLocation = window.location
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                writable: true,
+                value: { ...originalLocation, replace: jest.fn() },
+            })
+
+            try {
+                await expectLogic(logic, () => {
+                    logic.actions.initiateImpersonation()
+                })
+                    .toFinishAllListeners()
+                    .toMatchValues({
+                        returnToTicketContext: { ticketNumber: 42, email: 'a@example.com' },
+                    })
+
+                expect(window.location.replace).toHaveBeenCalledWith('/')
+            } finally {
+                Object.defineProperty(window, 'location', {
+                    configurable: true,
+                    writable: true,
+                    value: originalLocation,
+                })
+            }
+        })
+    })
+
+    describe('returnToTicket listener', () => {
+        it('logs out of impersonation back to the ticket and shows a loading state', async () => {
+            logic.actions.setReturnToTicketContext({ ticketNumber: 42, email: 'a@example.com' })
+
+            const originalLocation = window.location
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                writable: true,
+                value: { ...originalLocation, href: originalLocation.href },
+            })
+
+            try {
+                await expectLogic(logic, () => {
+                    logic.actions.returnToTicket()
+                })
+                    .toFinishAllListeners()
+                    // Context is intentionally kept so the button doesn't flip variants
+                    // before navigating; isReturningToTicket drives the loading state.
+                    .toMatchValues({
+                        returnToTicketContext: { ticketNumber: 42, email: 'a@example.com' },
+                        isReturningToTicket: true,
+                    })
+
+                expect(window.location.href).toBe('/admin/logout/?next=%2Fsupport%2Ftickets%2F42')
+            } finally {
+                Object.defineProperty(window, 'location', {
+                    configurable: true,
+                    writable: true,
+                    value: originalLocation,
+                })
+            }
+        })
+
+        it('does nothing when there is no stored ticket context', async () => {
+            const originalLocation = window.location
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                writable: true,
+                value: { ...originalLocation, href: 'sentinel' },
+            })
+
+            try {
+                await expectLogic(logic, () => {
+                    logic.actions.returnToTicket()
+                }).toFinishAllListeners()
+
+                expect(window.location.href).toBe('sentinel')
+            } finally {
+                Object.defineProperty(window, 'location', {
+                    configurable: true,
+                    writable: true,
+                    value: originalLocation,
+                })
+            }
+        })
+    })
+
+    describe('canReturnToTicket selector', () => {
+        const matchingEmail = MOCK_IMPERSONATED_USER.email
+
+        it.each([
+            { name: 'no stored context', context: null as any, user: MOCK_IMPERSONATED_USER, expected: false },
+            {
+                name: 'not impersonated',
+                context: { ticketNumber: 42, email: matchingEmail },
+                user: MOCK_DEFAULT_USER,
+                expected: false,
+            },
+            {
+                name: 'impersonating a different email',
+                context: { ticketNumber: 42, email: 'someone-else@example.com' },
+                user: MOCK_IMPERSONATED_USER,
+                expected: false,
+            },
+            {
+                name: 'impersonating the stored email',
+                context: { ticketNumber: 42, email: matchingEmail },
+                user: MOCK_IMPERSONATED_USER,
+                expected: true,
+            },
+        ])('is $expected when $name', async ({ context, user, expected }) => {
+            userLogic.actions.loadUserSuccess(user)
+            if (context) {
+                logic.actions.setReturnToTicketContext(context)
+            }
+
+            await expectLogic(logic).toMatchValues({ canReturnToTicket: expected })
+        })
+    })
+
+    describe('expiredSessionFromTicket selector', () => {
+        it.each([
+            {
+                name: 'no expired session',
+                expired: null as any,
+                context: { ticketNumber: 42, email: 'a@x.com' },
+                expected: false,
+            },
+            {
+                name: 'no stored context',
+                expired: { email: 'a@x.com', userId: 1, isImpersonatedUntil: null },
+                context: null as any,
+                expected: false,
+            },
+            {
+                name: 'emails differ',
+                expired: { email: 'a@x.com', userId: 1, isImpersonatedUntil: null },
+                context: { ticketNumber: 42, email: 'b@x.com' },
+                expected: false,
+            },
+            {
+                name: 'emails match',
+                expired: { email: 'a@x.com', userId: 1, isImpersonatedUntil: null },
+                context: { ticketNumber: 42, email: 'a@x.com' },
+                expected: true,
+            },
+        ])('is $expected when $name', async ({ expired, context, expected }) => {
+            if (expired) {
+                logic.actions.setSessionExpired(expired)
+            }
+            if (context) {
+                logic.actions.setReturnToTicketContext(context)
+            }
+
+            await expectLogic(logic).toMatchValues({ expiredSessionFromTicket: expected })
         })
     })
 
@@ -372,6 +542,23 @@ describe('impersonationNoticeLogic', () => {
             })
 
             expect(lemonToast.success).not.toHaveBeenCalled()
+        })
+
+        it('drops a stored ticket when loading as a non-impersonated user', async () => {
+            logic.actions.setReturnToTicketContext({ ticketNumber: 42, email: 'a@example.com' })
+
+            await expectLogic(logic, () => {
+                logic.actions.loadUserSuccess(MOCK_DEFAULT_USER)
+            }).toMatchValues({ returnToTicketContext: null })
+        })
+
+        it('keeps a stored ticket while still impersonating', async () => {
+            const context = { ticketNumber: 42, email: 'a@example.com' }
+            logic.actions.setReturnToTicketContext(context)
+
+            await expectLogic(logic, () => {
+                logic.actions.loadUserSuccess(MOCK_IMPERSONATED_USER)
+            }).toMatchValues({ returnToTicketContext: context })
         })
     })
 

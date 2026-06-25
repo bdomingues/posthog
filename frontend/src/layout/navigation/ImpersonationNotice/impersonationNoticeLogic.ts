@@ -5,6 +5,7 @@ import { lemonToast } from '@posthog/lemon-ui'
 
 import api from 'lib/api'
 import { dayjs } from 'lib/dayjs'
+import { urls } from 'scenes/urls'
 import { userLogic } from 'scenes/userLogic'
 
 import { Region, UserType } from '~/types'
@@ -23,8 +24,17 @@ export interface ExpiredSessionInfo {
 
 export interface ImpersonationTicketContext {
     ticketId: string
+    ticketNumber?: number
     email: string
     region?: Region
+}
+
+// Persisted across the post-impersonation page reload so the notice can offer a
+// one-click return to the originating support ticket. We key on email so a stale
+// value never attaches itself to an unrelated impersonation session.
+export interface ReturnToTicketContext {
+    ticketNumber: number
+    email: string
 }
 
 export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
@@ -32,7 +42,10 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
 
     connect(() => ({
         values: [userLogic, ['user', 'isImpersonationUpgradeInProgress']],
-        actions: [userLogic, ['upgradeImpersonation', 'upgradeImpersonationSuccess', 'loadUser', 'loadUserSuccess']],
+        actions: [
+            userLogic,
+            ['upgradeImpersonation', 'upgradeImpersonationSuccess', 'loadUser', 'loadUserSuccess', 'logout'],
+        ],
     })),
 
     actions({
@@ -49,6 +62,8 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
         reImpersonate: (reason: string, readOnly: boolean) => ({ reason, readOnly }),
         reImpersonateFailure: (error: string) => ({ error }),
         returnToPostHog: true,
+        setReturnToTicketContext: (context: ReturnToTicketContext | null) => ({ context }),
+        returnToTicket: true,
     }),
 
     reducers({
@@ -102,19 +117,70 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
                 setSessionExpired: () => false,
             },
         ],
+        returnToTicketContext: [
+            null as ReturnToTicketContext | null,
+            { persist: true },
+            {
+                setReturnToTicketContext: (_, { context }) => context,
+            },
+        ],
+        isReturningToTicket: [
+            false,
+            {
+                returnToTicket: () => true,
+            },
+        ],
     }),
 
     selectors({
         isReadOnly: [(s) => [s.user], (user: UserType | null): boolean => user?.is_impersonated_read_only ?? true],
         isImpersonated: [(s) => [s.user], (user: UserType | null): boolean => user?.is_impersonated ?? false],
         isSessionExpired: [(s) => [s.expiredSessionInfo], (info: ExpiredSessionInfo | null): boolean => info !== null],
+        canReturnToTicket: [
+            (s) => [s.user, s.returnToTicketContext],
+            (user: UserType | null, context: ReturnToTicketContext | null): boolean =>
+                context !== null && (user?.is_impersonated ?? false) && user?.email === context.email,
+        ],
+        // The expired session belongs to a ticket impersonation if its email matches
+        // the stored ticket context — the live user may already be gone by then.
+        expiredSessionFromTicket: [
+            (s) => [s.expiredSessionInfo, s.returnToTicketContext],
+            (expired: ExpiredSessionInfo | null, context: ReturnToTicketContext | null): boolean =>
+                expired !== null && context !== null && expired.email === context.email,
+        ],
+        returnTicketLabel: [
+            (s) => [s.returnToTicketContext],
+            (context: ReturnToTicketContext | null): string | null =>
+                context ? `Return to ticket #${context.ticketNumber}` : null,
+        ],
+        returnTicketReason: [
+            (s) => [s.returnToTicketContext],
+            (context: ReturnToTicketContext | null): string =>
+                context ? `Investigating ticket #${context.ticketNumber}` : '',
+        ],
     }),
 
     listeners(({ actions, values }) => ({
         returnToPostHog: () => {
             // Restore the original staff login (via the loginas logout endpoint) and
             // land back in the PostHog app rather than the Django admin.
+            actions.setReturnToTicketContext(null)
             window.location.href = `/admin/logout/?next=${encodeURIComponent('/')}`
+        },
+        returnToTicket: () => {
+            const { returnToTicketContext } = values
+            if (!returnToTicketContext) {
+                return
+            }
+            // Returning to the ticket means dropping the customer impersonation and
+            // landing back on the support ticket as the original staff user.
+            const next = urls.supportTicketDetail(returnToTicketContext.ticketNumber)
+            window.location.href = `/admin/logout/?next=${encodeURIComponent(next)}`
+        },
+        logout: () => {
+            // A plain logout abandons impersonation entirely; drop the stored ticket
+            // so it can't reattach to a later session for the same customer email.
+            actions.setReturnToTicketContext(null)
         },
         initiateImpersonation: async () => {
             const { ticketContext } = values
@@ -131,6 +197,14 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
                     window.open(result.redirect_url, '_blank')
                     actions.initiateImpersonationComplete()
                     return
+                }
+                // Staying in this tab as the impersonated customer — remember the
+                // ticket so the notice can offer a one-click return after the reload.
+                if (ticketContext.ticketNumber != null) {
+                    actions.setReturnToTicketContext({
+                        ticketNumber: ticketContext.ticketNumber,
+                        email: ticketContext.email,
+                    })
                 }
                 // Reload into the app as the impersonated customer.
                 window.location.replace('/')
@@ -160,6 +234,12 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
             }
         },
         loadUserSuccess: ({ user }) => {
+            // Once we load as a non-impersonated (staff) user, any stored ticket has
+            // outlived its session — drop it so it can't reattach to a later, unrelated
+            // impersonation of the same customer (e.g. a direct django-admin login-as).
+            if (!user?.is_impersonated && values.returnToTicketContext) {
+                actions.setReturnToTicketContext(null)
+            }
             const { expiredSessionInfo } = values
             if (!expiredSessionInfo) {
                 return
