@@ -124,6 +124,7 @@ the row lists both.
 | guru              | HTTP                        | requests                                                        | ✅                          |
 | hibob             | HTTP                        | requests                                                        | ✅                          |
 | hubspot           | HTTP                        | requests                                                        | ✅                          |
+| instagram         | HTTP                        | requests                                                        | ✅                          |
 | incident_io       | HTTP                        | requests                                                        | ✅                          |
 | intercom          | HTTP                        | requests + `rest_source.RESTClient`                             | ✅                          |
 | iterable          | HTTP                        | requests                                                        | ✅                          |
