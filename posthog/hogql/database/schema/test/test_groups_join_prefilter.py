@@ -44,8 +44,11 @@ class TestGroupsJoinPrefilter(APIBaseTest):
     def test_pushes_group_key_filter_when_outer_where_has_timestamp(self):
         sql = self._print("SELECT group_0.properties FROM events WHERE timestamp > toDateTime('2026-01-01') LIMIT 10")
         # Groups subquery now constrains group_key to the keys present in the matched events.
+        # The `$group_0` field reference can be wrapped by the resolver (timestamp clamping
+        # against the GroupTypeMapping created_at, etc.), so we only assert the column ref
+        # appears in the printed SQL — not the exact SELECT prefix.
         self.assertIn("in(key,", sql)
-        self.assertIn("SELECT events.`$group_0`", sql)
+        self.assertIn("events.`$group_0`", sql)
         self.assertIn("FROM events", sql)
 
     def test_pushes_group_key_filter_with_uuid_and_timestamp_where(self):
@@ -57,7 +60,7 @@ class TestGroupsJoinPrefilter(APIBaseTest):
             "AND timestamp < toDateTime('2026-06-23 13:32:26')"
         )
         self.assertIn("in(key,", sql)
-        self.assertIn("SELECT events.`$group_0`", sql)
+        self.assertIn("events.`$group_0`", sql)
 
     def test_skips_filter_when_outer_where_lacks_timestamp(self):
         # No timestamp reference → the optimization would push a key subquery that scans every
@@ -91,5 +94,14 @@ class TestGroupsJoinPrefilter(APIBaseTest):
             "WHERE person.properties.plan = 'pro' "
             "AND timestamp > toDateTime('2026-01-01')"
         )
+        self.assertIn("events__group_0", sql)
+        self.assertNotIn("in(key,", sql)
+
+    def test_skips_filter_when_outer_from_events_is_aliased(self):
+        # Funnel queries (and others) build `FROM events AS e ... WHERE e.timestamp > X`.
+        # Cloning that WHERE into the inner `SELECT $group_N FROM events` subquery would
+        # carry references to `e.X` that have no scope in the inner subquery, raising
+        # `Unable to resolve field: e`. Guard skips the optimization for aliased FROMs.
+        sql = self._print("SELECT group_0.properties FROM events AS e WHERE e.timestamp > toDateTime('2026-01-01')")
         self.assertIn("events__group_0", sql)
         self.assertNotIn("in(key,", sql)

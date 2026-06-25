@@ -140,19 +140,35 @@ def _outer_events_prefilter(node: SelectQuery):
     Extract a clone of the outer query's WHERE that we can safely embed inside the groups
     join subquery. We only return it when:
 
-    1. It references the `timestamp` field — cheap heuristic for "the matched event set is
-       bounded by a date range." Without that guard, a query whose WHERE is only
+    1. The outer's `FROM` is a plain unaliased `events` reference. Anything else (custom
+       alias like `FROM events AS e` in funnels, JOINed tables on the outer, or a subquery)
+       means the WHERE may reference symbols (`e.timestamp`, `p.id`, …) that don't exist
+       in our inner `SELECT $group_N FROM events` subquery — cloning a WHERE that names
+       them would raise `Unable to resolve field` when the resolver walks the clone.
+    2. The WHERE references the `timestamp` field — cheap heuristic for "the matched event
+       set is bounded by a date range." Without that guard, a query whose WHERE is only
        `team_id = X` (or empty) would push a key subquery that scans every event for the
        team, which is strictly worse than no filter at all.
-    2. It does not reference any lazy-join alias on the events table. Cloning a
+    3. The WHERE does not reference any lazy-join alias on the events table. Cloning a
        `group_N.X` / `person.X` reference into the inner subquery would re-trigger the
        resolver on the same lazy join during inner-subquery resolution.
     """
+    from posthog.hogql import ast as hogql_ast
     from posthog.hogql.transforms.lazy_tables import find_field_chains
 
     where = node.where
     if where is None:
         return None
+
+    select_from = node.select_from
+    if select_from is None:
+        return None
+    table = select_from.table
+    if not isinstance(table, hogql_ast.Field) or table.chain != ["events"]:
+        return None
+    if select_from.alias is not None and select_from.alias != "events":
+        return None
+
     if not _references_timestamp(where):
         return None
     if any(
