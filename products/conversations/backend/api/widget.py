@@ -172,6 +172,10 @@ class WidgetMessageView(APIView):
                 if session_context:
                     ticket.session_context.update(session_context)
 
+                # HMAC-verified requests are server-attested — mark the identity trusted.
+                if verified_distinct_id is not None:
+                    ticket.identity_verified = True
+
                 # Increment unread count for team (customer sent a message)
                 ticket.unread_team_count = F("unread_team_count") + 1
                 ticket.save(
@@ -181,6 +185,7 @@ class WidgetMessageView(APIView):
                         "session_id",
                         "session_context",
                         "unread_team_count",
+                        "identity_verified",
                         "updated_at",
                     ]
                 )
@@ -207,6 +212,7 @@ class WidgetMessageView(APIView):
                 unread_team_count=1,
                 session_id=session_id,
                 session_context=session_context,
+                identity_verified=verified_distinct_id is not None,
             )
 
             try:
