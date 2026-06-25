@@ -1357,6 +1357,9 @@ class ActiveOrganizationMiddleware:
 # Session key used to mark an impersonation session as read-only
 IMPERSONATION_READ_ONLY_SESSION_KEY = "impersonation_read_only"
 
+# Session key holding the support ticket an impersonation session was started from
+IMPERSONATION_TICKET_ID_SESSION_KEY = "impersonation_ticket_id"
+
 
 def is_read_only_impersonation(request: HttpRequest) -> bool:
     """Check if the current session is a read-only impersonation session."""

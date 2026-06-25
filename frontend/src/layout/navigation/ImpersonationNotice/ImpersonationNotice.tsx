@@ -14,12 +14,7 @@ import { cn } from 'lib/utils/css-classes'
 import { userLogic } from 'scenes/userLogic'
 
 import { AdminLoginButtons } from './AdminLoginButtons'
-import {
-    AdminLoginUrl,
-    ExpiredSessionInfo,
-    ImpersonationTicketContext,
-    impersonationNoticeLogic,
-} from './impersonationNoticeLogic'
+import { ExpiredSessionInfo, ImpersonationTicketContext, impersonationNoticeLogic } from './impersonationNoticeLogic'
 import { ImpersonationReasonModal } from './ImpersonationReasonModal'
 
 function CountDown({ datetime, callback }: { datetime: dayjs.Dayjs; callback?: () => void }): JSX.Element {
@@ -54,13 +49,7 @@ function CountDown({ datetime, callback }: { datetime: dayjs.Dayjs; callback?: (
     return <span className="tabular-nums text-warning">{countdown}</span>
 }
 
-function LoginAsContent({
-    ticketContext,
-    adminLoginUrls,
-}: {
-    ticketContext: ImpersonationTicketContext
-    adminLoginUrls: AdminLoginUrl[]
-}): JSX.Element {
+function LoginAsContent({ ticketContext }: { ticketContext: ImpersonationTicketContext }): JSX.Element {
     return (
         <>
             <p className="ImpersonationNotice__message">
@@ -72,7 +61,7 @@ function LoginAsContent({
                     'No customer email on this ticket'
                 )}
             </p>
-            <AdminLoginButtons ticketContext={ticketContext} adminLoginUrls={adminLoginUrls} />
+            <AdminLoginButtons />
         </>
     )
 }
@@ -192,15 +181,8 @@ function ImpersonationNoticeContent(): JSX.Element {
 export function ImpersonationNotice(): JSX.Element | null {
     const { user } = useValues(userLogic)
 
-    const {
-        isMinimized,
-        isReadOnly,
-        isImpersonated,
-        isSessionExpired,
-        expiredSessionInfo,
-        ticketContext,
-        adminLoginUrls,
-    } = useValues(impersonationNoticeLogic)
+    const { isMinimized, isReadOnly, isImpersonated, isSessionExpired, expiredSessionInfo, ticketContext } =
+        useValues(impersonationNoticeLogic)
     const { minimize, maximize, openUpgradeModal, setPageVisible } = useActions(impersonationNoticeLogic)
 
     const { isVisible: isPageVisible } = usePageVisibility()
@@ -288,7 +270,7 @@ export function ImpersonationNotice(): JSX.Element | null {
                         </div>
                         <div className="ImpersonationNotice__content">
                             {showLoginAs ? (
-                                <LoginAsContent ticketContext={ticketContext!} adminLoginUrls={adminLoginUrls} />
+                                <LoginAsContent ticketContext={ticketContext!} />
                             ) : (
                                 <ImpersonationNoticeContent />
                             )}

@@ -4,13 +4,12 @@ import { urlToAction } from 'kea-router'
 import { lemonToast } from '@posthog/lemon-ui'
 
 import api from 'lib/api'
-import { CLOUD_HOSTNAMES } from 'lib/constants'
 import { dayjs } from 'lib/dayjs'
 import { userLogic } from 'scenes/userLogic'
 
 import { Region, UserType } from '~/types'
 
-import { adminLoginAs } from './adminLoginAs'
+import { adminLoginAs, loginAsFromTicket } from './adminLoginAs'
 import type { impersonationNoticeLogicType } from './impersonationNoticeLogicType'
 
 export interface ExpiredSessionInfo {
@@ -26,21 +25,6 @@ export interface ImpersonationTicketContext {
     ticketId: string
     email: string
     region?: Region
-}
-
-export interface AdminLoginUrl {
-    region: Region
-    url: string
-}
-
-// When a ticket's region is unknown (e.g. tickets opened from a Slack channel
-// carry no app URL to infer it from), fall back to offering a lookup in each
-// production cloud region rather than no link at all.
-const ADMIN_LOOKUP_REGIONS: Region[] = [Region.US, Region.EU]
-
-function adminLoginUrlForRegion(region: Region, email: string): string {
-    const domain = CLOUD_HOSTNAMES[region]
-    return `https://${domain}/admin/posthog/user/?q=${encodeURIComponent(email)}`
 }
 
 export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
@@ -59,6 +43,8 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
         setPageVisible: (visible: boolean) => ({ visible }),
         clearPageHiddenAt: true,
         setTicketContext: (context: ImpersonationTicketContext | null) => ({ context }),
+        initiateImpersonation: true,
+        initiateImpersonationComplete: true,
         setSessionExpired: (info: ExpiredSessionInfo | null) => ({ info }),
         reImpersonate: (reason: string, readOnly: boolean) => ({ reason, readOnly }),
         reImpersonateFailure: (error: string) => ({ error }),
@@ -95,6 +81,13 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
                 setTicketContext: (_, { context }) => context,
             },
         ],
+        isInitiatingImpersonation: [
+            false,
+            {
+                initiateImpersonation: () => true,
+                initiateImpersonationComplete: () => false,
+            },
+        ],
         expiredSessionInfo: [
             null as ExpiredSessionInfo | null,
             {
@@ -114,19 +107,6 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
     selectors({
         isReadOnly: [(s) => [s.user], (user: UserType | null): boolean => user?.is_impersonated_read_only ?? true],
         isImpersonated: [(s) => [s.user], (user: UserType | null): boolean => user?.is_impersonated ?? false],
-        adminLoginUrls: [
-            (s) => [s.ticketContext],
-            (ticketContext: ImpersonationTicketContext | null): AdminLoginUrl[] => {
-                if (!ticketContext?.email) {
-                    return []
-                }
-                const regions = ticketContext.region ? [ticketContext.region] : ADMIN_LOOKUP_REGIONS
-                return regions.map((region) => ({
-                    region,
-                    url: adminLoginUrlForRegion(region, ticketContext.email),
-                }))
-            },
-        ],
         isSessionExpired: [(s) => [s.expiredSessionInfo], (info: ExpiredSessionInfo | null): boolean => info !== null],
     }),
 
@@ -135,6 +115,29 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
             // Restore the original staff login (via the loginas logout endpoint) and
             // land back in the PostHog app rather than the Django admin.
             window.location.href = `/admin/logout/?next=${encodeURIComponent('/')}`
+        },
+        initiateImpersonation: async () => {
+            const { ticketContext } = values
+            if (!ticketContext) {
+                actions.initiateImpersonationComplete()
+                return
+            }
+
+            try {
+                const result = await loginAsFromTicket(ticketContext.ticketId)
+                if (result.redirect_url) {
+                    // Ticket belongs to another region — open that region's admin instead.
+                    lemonToast.info(`This ticket is from ${result.redirect_region}. Opening in a new tab…`)
+                    window.open(result.redirect_url, '_blank')
+                    actions.initiateImpersonationComplete()
+                    return
+                }
+                // Reload into the app as the impersonated customer.
+                window.location.replace('/')
+            } catch (e) {
+                lemonToast.error(e instanceof Error ? e.message : 'Failed to impersonate user')
+                actions.initiateImpersonationComplete()
+            }
         },
         upgradeImpersonationSuccess: () => {
             if (values.isUpgradeModalOpen && !values.isReadOnly) {

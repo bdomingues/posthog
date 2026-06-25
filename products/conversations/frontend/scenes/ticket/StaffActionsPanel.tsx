@@ -6,7 +6,7 @@ import { AdminLoginButtons } from '~/layout/navigation/ImpersonationNotice/Admin
 import { impersonationNoticeLogic } from '~/layout/navigation/ImpersonationNotice/impersonationNoticeLogic'
 
 export function StaffActionsPanel(): JSX.Element {
-    const { ticketContext, adminLoginUrls } = useValues(impersonationNoticeLogic)
+    const { ticketContext } = useValues(impersonationNoticeLogic)
 
     return (
         <LemonCollapse
@@ -28,7 +28,7 @@ export function StaffActionsPanel(): JSX.Element {
                                         'No customer email on this ticket'
                                     )}
                                 </span>
-                                <AdminLoginButtons ticketContext={ticketContext} adminLoginUrls={adminLoginUrls} />
+                                <AdminLoginButtons />
                             </div>
                         </div>
                     ),
