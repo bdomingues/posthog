@@ -27,36 +27,27 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import {
+    type RankedToolMatch,
+    type SearchableTool,
+    searchToolsRanked,
+    searchToolsRegex,
+} from '../src/tools/tool-search'
+
 const MCP_ROOT = path.resolve(__dirname, '..')
 const CATALOG_PATH = path.resolve(MCP_ROOT, 'schema', 'tool-definitions-all.json')
 
 /** Mirrors MAX_SEARCH_PATTERN_LENGTH in src/tools/exec.ts. */
 const MAX_SEARCH_PATTERN_LENGTH = 200
 
-const FIELD_WEIGHT = { name: 3, title: 2, description: 1 } as const
-type Field = keyof typeof FIELD_WEIGHT
-
 type Mode = 'regex' | 'tokens' | 'both'
 
-interface ToolEntry {
-    name: string
-    title: string
-    description: string
-}
+type ToolEntry = SearchableTool
 
 interface RegexResult {
     pattern: string
     matches: string[]
     error?: string
-}
-
-interface ScoredTool {
-    name: string
-    /** Distinct query tokens found in any field — the primary relevance signal. */
-    tokensMatched: number
-    /** Field-weighted score, tie-breaker once token coverage is equal. */
-    score: number
-    fields: Field[]
 }
 
 interface Args {
@@ -78,10 +69,9 @@ function loadCatalog(): ToolEntry[] {
     }))
 }
 
-// Faithful copy of the `search` predicate in src/tools/exec.ts:220-262 — same
-// length cap, same invalid-regex guard, same case-insensitive test over
-// name/title/description. Kept as a copy (not an import) so this debug script
-// stays decoupled from the server runtime; the line reference flags drift.
+// Reproduces the server's `exec search` regex predicate via the shared module
+// (src/tools/tool-search.ts), wrapped with the same length cap and invalid-regex
+// handling exec.ts applies — so the debugger can't drift from the runtime.
 function searchRegex(tools: ToolEntry[], pattern: string): RegexResult {
     if (pattern.length > MAX_SEARCH_PATTERN_LENGTH) {
         return {
@@ -90,56 +80,19 @@ function searchRegex(tools: ToolEntry[], pattern: string): RegexResult {
             error: `pattern too long (${pattern.length} chars, max ${MAX_SEARCH_PATTERN_LENGTH})`,
         }
     }
-    let regex: RegExp
     try {
-        regex = new RegExp(pattern, 'i')
+        return { pattern, matches: searchToolsRegex(tools, pattern).map((t) => t.name) }
     } catch {
         return { pattern, matches: [], error: `invalid regex pattern: "${pattern}"` }
     }
-    const matches = tools
-        .filter((t) => regex.test(t.name) || regex.test(t.title) || regex.test(t.description))
-        .map((t) => t.name)
-    return { pattern, matches }
 }
 
-// Candidate ranked search for comparison — not what the server runs today.
-// Splits the query into tokens and ranks by how many distinct tokens appear in a
-// tool's metadata, so multi-word intents like "create dashboard insight" surface
-// dashboard-create / insight-create instead of returning nothing.
-function searchTokens(tools: ToolEntry[], query: string): ScoredTool[] {
-    const tokens = [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))]
-    if (tokens.length === 0) {
-        return []
-    }
-    const scored: ScoredTool[] = []
-    for (const t of tools) {
-        const haystack: Record<Field, string> = {
-            name: t.name.toLowerCase(),
-            title: t.title.toLowerCase(),
-            description: t.description.toLowerCase(),
-        }
-        let tokensMatched = 0
-        let score = 0
-        const fields = new Set<Field>()
-        for (const token of tokens) {
-            // Count each token once, at its highest-weight field, so a token in the
-            // name outweighs the same token buried in a description.
-            const field = (['name', 'title', 'description'] as Field[]).find((f) => haystack[f].includes(token))
-            if (field) {
-                tokensMatched += 1
-                score += FIELD_WEIGHT[field]
-                fields.add(field)
-            }
-        }
-        if (tokensMatched > 0) {
-            scored.push({ name: t.name, tokensMatched, score, fields: [...fields] })
-        }
-    }
-    // Field-weighted score first: a token in the tool name beats the same token
-    // buried in a description, so dashboard-create outranks a tool that merely
-    // mentions "create"/"dashboard"/"insight" in prose. Token coverage breaks ties.
-    scored.sort((a, b) => b.score - a.score || b.tokensMatched - a.tokensMatched || a.name.localeCompare(b.name))
-    return scored
+// Forgiving ranked search, shared with `exec search` (src/tools/tool-search.ts):
+// splits the query into tokens and ranks by a field-weighted score, so
+// multi-word intents like "create dashboard insight" surface dashboard-create /
+// insight-create instead of returning nothing.
+function searchTokens(tools: ToolEntry[], query: string): RankedToolMatch[] {
+    return searchToolsRanked(tools, query)
 }
 
 function parseArgs(argv: string[]): Args {
@@ -201,7 +154,7 @@ function renderRegex(result: RegexResult, limit: number): string {
     return lines.join('\n')
 }
 
-function renderTokens(scored: ScoredTool[], query: string, limit: number): string {
+function renderTokens(scored: RankedToolMatch[], query: string, limit: number): string {
     const tokens = [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))]
     const lines = [`▶ tokens mode  (candidate ranked search)`, `  tokens: ${tokens.join(', ')}`]
     if (scored.length === 0) {
