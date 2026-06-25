@@ -552,8 +552,16 @@ describe('impersonationNoticeLogic', () => {
             }).toMatchValues({ returnToTicketContext: null })
         })
 
-        it('keeps a stored ticket while still impersonating', async () => {
-            const context = { ticketNumber: 42, email: 'a@example.com' }
+        it('drops a stored ticket when impersonating a different customer', async () => {
+            logic.actions.setReturnToTicketContext({ ticketNumber: 42, email: 'someone-else@example.com' })
+
+            await expectLogic(logic, () => {
+                logic.actions.loadUserSuccess(MOCK_IMPERSONATED_USER)
+            }).toMatchValues({ returnToTicketContext: null })
+        })
+
+        it('keeps a stored ticket while still impersonating its customer', async () => {
+            const context = { ticketNumber: 42, email: MOCK_IMPERSONATED_USER.email }
             logic.actions.setReturnToTicketContext(context)
 
             await expectLogic(logic, () => {

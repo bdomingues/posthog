@@ -234,10 +234,14 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
             }
         },
         loadUserSuccess: ({ user }) => {
-            // Once we load as a non-impersonated (staff) user, any stored ticket has
-            // outlived its session — drop it so it can't reattach to a later, unrelated
-            // impersonation of the same customer (e.g. a direct django-admin login-as).
-            if (!user?.is_impersonated && values.returnToTicketContext) {
+            // Keep the stored ticket only while we're still impersonating the customer it
+            // belongs to. Any other load — back to staff, or impersonating someone else —
+            // means it has outlived its session, so drop it before it can reattach to an
+            // unrelated impersonation. A same-customer re-impersonation by a non-ticket
+            // path is indistinguishable here (we have no server-side signal tying an
+            // impersonation to a ticket) and will still match.
+            const ticket = values.returnToTicketContext
+            if (ticket && !(user?.is_impersonated && user.email === ticket.email)) {
                 actions.setReturnToTicketContext(null)
             }
             const { expiredSessionInfo } = values
