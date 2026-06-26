@@ -2215,11 +2215,14 @@ class AgentRevisionViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
         revision so the caller can refresh its cache in one round-trip.
         """
         revision: AgentRevision = self.get_object()
-        body = UpdateBundleFileRequestSerializer(data=request.data)
-        body.is_valid(raise_exception=True)
-
+        # Gate on draft state before validating the payload so a non-draft
+        # revision always returns 409, never a 400 that hides the real reason
+        # the request can't proceed.
         if (resp := self._require_draft_or_409(revision)) is not None:
             return resp
+
+        body = UpdateBundleFileRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
 
         path = body.validated_data["path"]
         content = body.validated_data["content"]
@@ -2274,11 +2277,14 @@ class AgentRevisionViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
         409 untouched.
         """
         revision: AgentRevision = self.get_object()
-        body = ImportBundleRequestSerializer(data=request.data)
-        body.is_valid(raise_exception=True)
-
+        # Gate on draft state before validating the payload so a non-draft
+        # revision always returns 409, never a 400 that hides the real reason
+        # the request can't proceed.
         if (resp := self._require_draft_or_409(revision)) is not None:
             return resp
+
+        body = ImportBundleRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
 
         agent_md = body.validated_data.get("agent_md")
         skills = body.validated_data.get("skills") or []
