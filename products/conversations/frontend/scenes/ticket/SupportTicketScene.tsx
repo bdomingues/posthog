@@ -126,7 +126,11 @@ export function SupportTicketScene({ ticketId }: { ticketId: string }): JSX.Elem
         <SceneContent>
             <SceneTitleSection
                 name={`Ticket: ${ticket?.ticket_number?.toString() || ticket?.id || ''}`}
-                nameSuffix={ticket && !ticket.identity_verified ? <IdentityBadge verified={false} /> : undefined}
+                nameSuffix={
+                    ticket && ticket.identity_verified !== true ? (
+                        <IdentityBadge verified={ticket.identity_verified} />
+                    ) : undefined
+                }
                 description=""
                 resourceType={{ type: 'conversation' }}
                 forceBackTo={{
@@ -207,7 +211,7 @@ export function SupportTicketScene({ ticketId }: { ticketId: string }): JSX.Elem
                                         withIcon
                                         withComposeTicketButton
                                     />
-                                    <IdentityBadge verified={!!ticket.identity_verified} />
+                                    <IdentityBadge verified={ticket.identity_verified} />
                                 </div>
                                 <div className="my-3 border-t" />
                             </>
