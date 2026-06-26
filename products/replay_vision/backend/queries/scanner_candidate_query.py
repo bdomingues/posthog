@@ -32,6 +32,8 @@ DEFAULT_MAX_EXECUTION_SECONDS = 180
 
 FOCUSED_SURFACING_THRESHOLD = 0.60
 BALANCED_SURFACING_THRESHOLD = 0.40
+# Sessions with no surfacing score at all are treated as below-balanced quality.
+NULL_SURFACING_SCORE_FALLBACK = 0.36
 
 # Excludes attacker-supplied over-length session_ids that would later wedge wire-payload validation.
 _MAX_SESSION_ID_LENGTH = 128
@@ -178,7 +180,7 @@ class ScannerCandidateQuery:
                 name="coalesce",
                 args=[
                     ast.Call(name="max", args=[ast.Field(chain=["s", "surfacing_score"])]),
-                    ast.Constant(value=0.36),
+                    ast.Constant(value=NULL_SURFACING_SCORE_FALLBACK),
                 ],
             ),
             right=ast.Constant(value=threshold),
