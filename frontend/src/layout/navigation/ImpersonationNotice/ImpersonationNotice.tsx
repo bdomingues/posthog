@@ -3,16 +3,19 @@ import './ImpersonationNotice.scss'
 import { useActions, useValues } from 'kea'
 import { useEffect, useRef, useState } from 'react'
 
-import { IconCollapse, IconEllipsis, IconWarning } from '@posthog/icons'
-import { LemonButton, LemonCheckbox, LemonMenu, Tooltip } from '@posthog/lemon-ui'
+import { IconChevronDown, IconCollapse, IconEllipsis, IconWarning } from '@posthog/icons'
+import { LemonButton, LemonCheckbox, LemonMenu, LemonTag, Tooltip } from '@posthog/lemon-ui'
 
 import { DraggableWithSnapZones, DraggableWithSnapZonesRef } from 'lib/components/DraggableWithSnapZones'
 import { dayjs } from 'lib/dayjs'
 import { usePageVisibility } from 'lib/hooks/usePageVisibility'
 import { IconDragHandle } from 'lib/lemon-ui/icons'
 import { cn } from 'lib/utils/css-classes'
+import { membershipLevelToName } from 'lib/utils/permissioning'
+import { capitalizeFirstLetter, fullName } from 'lib/utils/strings'
 import { userLogic } from 'scenes/userLogic'
 
+import { clearAllStoredImpersonationReasons, getStoredImpersonationReason } from './adminLoginAs'
 import { AdminLoginButtons } from './AdminLoginButtons'
 import {
     AdminLoginUrl,
@@ -96,6 +99,7 @@ function ImpersonationExpiredOverlay({ expiredSessionInfo }: { expiredSessionInf
                 label: 'Return to admin',
                 status: 'danger',
                 onClick: () => {
+                    clearAllStoredImpersonationReasons()
                     window.location.href = '/admin/'
                 },
                 sideAction: {
@@ -118,9 +122,54 @@ function ImpersonationExpiredOverlay({ expiredSessionInfo }: { expiredSessionInf
 function ImpersonationNoticeContent(): JSX.Element {
     const { user, userLoading } = useValues(userLogic)
     const { logout, loadUser } = useActions(userLogic)
-    const { isReadOnly, isUpgradeModalOpen, isImpersonationUpgradeInProgress } = useValues(impersonationNoticeLogic)
-    const { closeUpgradeModal, upgradeImpersonation, setSessionExpired, returnToPostHog } =
-        useActions(impersonationNoticeLogic)
+    const {
+        isReadOnly,
+        isUpgradeModalOpen,
+        isImpersonationUpgradeInProgress,
+        changeableMembers,
+        isChangingUser,
+        membersLoading,
+    } = useValues(impersonationNoticeLogic)
+    const {
+        closeUpgradeModal,
+        upgradeImpersonation,
+        setSessionExpired,
+        returnToPostHog,
+        changeUser,
+        ensureAllMembersLoaded,
+    } = useActions(impersonationNoticeLogic)
+
+    // Set when an operator picks a user but no cached reason exists — drives the fallback modal.
+    const [pendingUserId, setPendingUserId] = useState<number | null>(null)
+
+    // The reason given when impersonation of the current user started, reused for switching
+    // and for pre-filling the read-write upgrade modal.
+    const storedReason = getStoredImpersonationReason(user?.id)
+
+    const changeUserItems =
+        changeableMembers.length === 0
+            ? [{ label: membersLoading ? 'Loading…' : 'No other members', disabledReason: ' ' }]
+            : changeableMembers.map((member) => ({
+                  key: member.user.uuid,
+                  label: (
+                      <span className="flex items-center gap-2 justify-between w-full">
+                          <span>{fullName(member.user)}</span>
+                          <LemonTag>
+                              {capitalizeFirstLetter(
+                                  membershipLevelToName.get(member.level) ?? `unknown (${member.level})`
+                              )}
+                          </LemonTag>
+                      </span>
+                  ),
+                  disabledReason: isChangingUser ? 'Switching user…' : undefined,
+                  onClick: () => {
+                      if (storedReason?.trim()) {
+                          changeUser(member.user.id)
+                      } else {
+                          setPendingUserId(member.user.id)
+                      }
+                  },
+              }))
 
     const handleSessionExpired = (): void => {
         if (user) {
@@ -155,6 +204,14 @@ function ImpersonationNoticeContent(): JSX.Element {
                 <LemonButton type="secondary" size="small" onClick={() => loadUser()} loading={userLoading}>
                     Refresh
                 </LemonButton>
+                <LemonMenu
+                    items={changeUserItems}
+                    onVisibilityChange={(visible) => visible && ensureAllMembersLoaded()}
+                >
+                    <LemonButton type="secondary" size="small" sideIcon={<IconChevronDown />} loading={isChangingUser}>
+                        Change user
+                    </LemonButton>
+                </LemonMenu>
                 <LemonButton
                     type="secondary"
                     status="danger"
@@ -183,8 +240,23 @@ function ImpersonationNoticeContent(): JSX.Element {
                     description="Read-write mode allows you to make changes on behalf of the user. Please provide a reason for this upgrade."
                     confirmText="Upgrade"
                     loading={isImpersonationUpgradeInProgress}
+                    initialReason={storedReason ?? ''}
                 />
             )}
+            <ImpersonationReasonModal
+                isOpen={pendingUserId !== null}
+                onClose={() => setPendingUserId(null)}
+                onConfirm={(reason) => {
+                    if (pendingUserId !== null) {
+                        changeUser(pendingUserId, reason)
+                    }
+                    setPendingUserId(null)
+                }}
+                title="Change impersonated user"
+                description="Provide a reason for impersonating this user."
+                confirmText="Switch user"
+                loading={isChangingUser}
+            />
         </>
     )
 }

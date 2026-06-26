@@ -6,11 +6,13 @@ import { lemonToast } from '@posthog/lemon-ui'
 import api from 'lib/api'
 import { CLOUD_HOSTNAMES } from 'lib/constants'
 import { dayjs } from 'lib/dayjs'
+import { fullName } from 'lib/utils/strings'
+import { membersLogic } from 'scenes/organization/membersLogic'
 import { userLogic } from 'scenes/userLogic'
 
-import { Region, UserType } from '~/types'
+import { OrganizationMemberType, Region, UserType } from '~/types'
 
-import { adminLoginAs } from './adminLoginAs'
+import { adminLoginAs, clearAllStoredImpersonationReasons, getStoredImpersonationReason } from './adminLoginAs'
 import type { impersonationNoticeLogicType } from './impersonationNoticeLogicType'
 
 export interface ExpiredSessionInfo {
@@ -47,8 +49,13 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
     path(['layout', 'navigation', 'ImpersonationNotice', 'impersonationNoticeLogic']),
 
     connect(() => ({
-        values: [userLogic, ['user', 'isImpersonationUpgradeInProgress']],
-        actions: [userLogic, ['upgradeImpersonation', 'upgradeImpersonationSuccess', 'loadUser', 'loadUserSuccess']],
+        values: [userLogic, ['user', 'isImpersonationUpgradeInProgress'], membersLogic, ['members', 'membersLoading']],
+        actions: [
+            userLogic,
+            ['upgradeImpersonation', 'upgradeImpersonationSuccess', 'loadUser', 'loadUserSuccess', 'logout'],
+            membersLogic,
+            ['ensureAllMembersLoaded'],
+        ],
     })),
 
     actions({
@@ -62,6 +69,8 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
         setSessionExpired: (info: ExpiredSessionInfo | null) => ({ info }),
         reImpersonate: (reason: string, readOnly: boolean) => ({ reason, readOnly }),
         reImpersonateFailure: (error: string) => ({ error }),
+        changeUser: (userId: number, reason?: string) => ({ userId, reason }),
+        changeUserFailure: (error: string) => ({ error }),
         returnToPostHog: true,
     }),
 
@@ -109,6 +118,13 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
                 setSessionExpired: () => false,
             },
         ],
+        changingUserId: [
+            null as number | null,
+            {
+                changeUser: (_, { userId }) => userId,
+                changeUserFailure: () => null,
+            },
+        ],
     }),
 
     selectors({
@@ -128,12 +144,43 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
             },
         ],
         isSessionExpired: [(s) => [s.expiredSessionInfo], (info: ExpiredSessionInfo | null): boolean => info !== null],
+        isChangingUser: [
+            (s) => [s.changingUserId],
+            (changingUserId: number | null): boolean => changingUserId !== null,
+        ],
+        changeableMembers: [
+            (s) => [s.members, s.user],
+            (members: OrganizationMemberType[] | null, user: UserType | null): OrganizationMemberType[] => {
+                if (!members) {
+                    return []
+                }
+                return members
+                    .filter((member) => member.user.uuid !== user?.uuid)
+                    .slice()
+                    .sort((a, b) => {
+                        // Higher-power levels first (Owner > Admin > Member).
+                        if (a.level !== b.level) {
+                            return b.level - a.level
+                        }
+                        // Then names A→Z within each level group.
+                        const nameComparison = fullName(a.user).localeCompare(fullName(b.user))
+                        if (nameComparison !== 0) {
+                            return nameComparison
+                        }
+                        return a.user.uuid.localeCompare(b.user.uuid)
+                    })
+            },
+        ],
     }),
 
     listeners(({ actions, values }) => ({
+        logout: () => {
+            clearAllStoredImpersonationReasons()
+        },
         returnToPostHog: () => {
             // Restore the original staff login (via the loginas logout endpoint) and
             // land back in the PostHog app rather than the Django admin.
+            clearAllStoredImpersonationReasons()
             window.location.href = `/admin/logout/?next=${encodeURIComponent('/')}`
         },
         upgradeImpersonationSuccess: () => {
@@ -154,6 +201,24 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
                 const errorMessage = e instanceof Error ? e.message : 'Failed to re-impersonate'
                 lemonToast.error(errorMessage)
                 actions.reImpersonateFailure(errorMessage)
+            }
+        },
+        changeUser: async ({ userId, reason }) => {
+            const resolvedReason = reason?.trim() || getStoredImpersonationReason(values.user?.id)?.trim()
+            if (!resolvedReason) {
+                // The component prompts for a reason before dispatching when none is cached.
+                actions.changeUserFailure('A reason is required to change user')
+                return
+            }
+
+            try {
+                await adminLoginAs({ userId, reason: resolvedReason, readOnly: values.isReadOnly })
+                // Full reload so org/project/scene state resets for the newly impersonated user.
+                window.location.reload()
+            } catch (e) {
+                const errorMessage = e instanceof Error ? e.message : 'Failed to change user'
+                lemonToast.error(errorMessage)
+                actions.changeUserFailure(errorMessage)
             }
         },
         loadUserSuccess: ({ user }) => {
