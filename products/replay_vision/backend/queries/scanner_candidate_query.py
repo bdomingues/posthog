@@ -30,6 +30,9 @@ SAMPLE_RATE_PRECISION = 10_000
 DEFAULT_CANDIDATE_LIMIT = 5_000
 DEFAULT_MAX_EXECUTION_SECONDS = 180
 
+FOCUSED_SURFACING_THRESHOLD = 0.60
+BALANCED_SURFACING_THRESHOLD = 0.40
+
 # Excludes attacker-supplied over-length session_ids that would later wedge wire-payload validation.
 _MAX_SESSION_ID_LENGTH = 128
 
@@ -48,6 +51,7 @@ class ScannerCandidateQuery:
         query: RecordingsQuery,
         last_swept_at: dt.datetime,
         sampling_rate: float,
+        sampling_mode: str = "comprehensive",
         last_seen_session_id: str | None = None,
         candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
         max_execution_time_seconds: int = DEFAULT_MAX_EXECUTION_SECONDS,
@@ -65,6 +69,7 @@ class ScannerCandidateQuery:
         self._last_swept_at = last_swept_at
         self._last_seen_session_id = last_seen_session_id
         self._sampling_rate = max(0.0, min(1.0, sampling_rate))
+        self._sampling_mode = sampling_mode
         self._candidate_limit = candidate_limit
         self._max_execution_time_seconds = max_execution_time_seconds
 
@@ -80,6 +85,8 @@ class ScannerCandidateQuery:
         extra_having: list[ast.Expr] = []
         if (sampling := self._sampling_predicate()) is not None:
             extra_having.append(sampling)
+        if (surfacing := self._surfacing_score_predicate()) is not None:
+            extra_having.append(surfacing)
 
         self._inner = SessionRecordingListFromQuery(team=team, query=inner_query, extra_having_predicates=extra_having)
 
@@ -153,6 +160,25 @@ class ScannerCandidateQuery:
                 args=[
                     ast.Call(name="cityHash64", args=[ast.Field(chain=["s", "session_id"])]),
                     ast.Constant(value=SAMPLE_RATE_PRECISION),
+                ],
+            ),
+            right=ast.Constant(value=threshold),
+        )
+
+    def _surfacing_score_predicate(self) -> ast.Expr | None:
+        if self._sampling_mode == "focused":
+            threshold = FOCUSED_SURFACING_THRESHOLD
+        elif self._sampling_mode == "balanced":
+            threshold = BALANCED_SURFACING_THRESHOLD
+        else:
+            return None
+        return ast.CompareOperation(
+            op=ast.CompareOperationOp.GtEq,
+            left=ast.Call(
+                name="coalesce",
+                args=[
+                    ast.Call(name="max", args=[ast.Field(chain=["s", "surfacing_score"])]),
+                    ast.Constant(value=0.36),
                 ],
             ),
             right=ast.Constant(value=threshold),

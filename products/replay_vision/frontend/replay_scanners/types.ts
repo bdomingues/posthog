@@ -185,12 +185,33 @@ export type ScannerConfig =
     | ClassifierScannerConfig
     | ScorerScannerConfig
 
+export type SamplingMode = 'focused' | 'balanced' | 'comprehensive'
+
+export const SAMPLING_MODE_OPTIONS: { value: SamplingMode; label: string; description: string }[] = [
+    {
+        value: 'focused',
+        label: 'Focused',
+        description: 'Only top sessions by quality signal — skips routine sessions.',
+    },
+    {
+        value: 'balanced',
+        label: 'Balanced',
+        description: 'Drops the lowest-quality sessions, keeps a broad mix.',
+    },
+    {
+        value: 'comprehensive',
+        label: 'Comprehensive',
+        description: 'No quality filter — uniform across everything that matches.',
+    },
+]
+
 export interface BaseReplayScanner {
     id: string
     name: string
     description?: string
     enabled: boolean
     sampling_rate: number
+    sampling_mode: SamplingMode
     query: RecordingsQuery | null
     provider: string
     model: string

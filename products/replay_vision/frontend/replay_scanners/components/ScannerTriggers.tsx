@@ -1,6 +1,6 @@
 import { useActions, useValues } from 'kea'
 
-import { LemonDivider, LemonInput } from '@posthog/lemon-ui'
+import { LemonDivider, LemonInput, LemonSegmentedButton } from '@posthog/lemon-ui'
 
 import { TaxonomicFilterGroupType } from 'lib/components/TaxonomicFilter/types'
 import UniversalFilters from 'lib/components/UniversalFilters/UniversalFilters'
@@ -16,6 +16,7 @@ import {
 import { RecordingsQuery } from '~/queries/schema/schema-general'
 
 import { replayScannerLogic } from '../replayScannerLogic'
+import { SAMPLING_MODE_OPTIONS, SamplingMode } from '../types'
 import { ScannerQuotaForecast } from './ScannerQuotaForecast'
 
 // Mirrors the recordings list, minus its playlist-only groups (saved/suggested filters).
@@ -72,6 +73,23 @@ export function ScannerTriggers({ scannerId }: { scannerId: string }): JSX.Eleme
 
     return (
         <div className="space-y-6 max-w-3xl">
+            <LemonField name="sampling_mode" label="Quality filter">
+                {({ value, onChange }) => {
+                    const mode = (value ?? 'comprehensive') as SamplingMode
+                    const option = SAMPLING_MODE_OPTIONS.find((o) => o.value === mode)
+                    return (
+                        <div className="space-y-1">
+                            <LemonSegmentedButton
+                                value={mode}
+                                onChange={(v) => onChange(v)}
+                                options={SAMPLING_MODE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                            />
+                            <div className="text-xs text-muted">{option?.description}</div>
+                        </div>
+                    )
+                }}
+            </LemonField>
+
             <LemonField name="sampling_rate" label="Sampling">
                 {({ value, onChange }) => {
                     const ratio = typeof value === 'number' ? value : 0

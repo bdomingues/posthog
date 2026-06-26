@@ -14,7 +14,9 @@ from posthog.session_recordings.sql.session_replay_event_sql import TRUNCATE_SES
 from posthog.test.persons import create_person
 
 from products.replay_vision.backend.queries.scanner_candidate_query import (
+    BALANCED_SURFACING_THRESHOLD,
     DEFAULT_CANDIDATE_LIMIT,
+    FOCUSED_SURFACING_THRESHOLD,
     SAMPLE_RATE_PRECISION,
     SETTLE_INTERVAL,
     ScannerCandidateQuery,
@@ -125,6 +127,26 @@ def test_sampling_predicate_emits_modulo_compare_at_partial_rate():
     assert isinstance(modulo, ast.Call) and modulo.name == "modulo"
     city = modulo.args[0]
     assert isinstance(city, ast.Call) and city.name == "cityHash64"
+
+
+def test_surfacing_score_predicate_passthrough_in_comprehensive():
+    q = _make_query(sampling_mode="comprehensive")
+    assert q._surfacing_score_predicate() is None
+
+
+@pytest.mark.parametrize(
+    "mode,expected_threshold",
+    [
+        ("focused", FOCUSED_SURFACING_THRESHOLD),
+        ("balanced", BALANCED_SURFACING_THRESHOLD),
+    ],
+)
+def test_surfacing_score_predicate_emits_threshold(mode, expected_threshold):
+    q = _make_query(sampling_mode=mode)
+    expr = q._surfacing_score_predicate()
+    assert isinstance(expr, ast.CompareOperation)
+    assert expr.op == ast.CompareOperationOp.GtEq
+    assert isinstance(expr.right, ast.Constant) and expr.right.value == expected_threshold
 
 
 # Integration: actual ClickHouse query.
