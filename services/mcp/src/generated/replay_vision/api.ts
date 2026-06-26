@@ -134,6 +134,13 @@ export const VisionScannersCreateBody = /* @__PURE__ */ zod.object({
         .max(visionScannersCreateBodySamplingRateMax)
         .optional()
         .describe('0..1 random downsample applied after the query matches. Defaults to 1.0 (no downsampling).'),
+    sampling_mode: zod
+        .enum(['focused', 'balanced', 'comprehensive'])
+        .describe('* `focused` - Focused\n* `balanced` - Balanced\n* `comprehensive` - Comprehensive')
+        .optional()
+        .describe(
+            'Quality pre-filter applied before random sampling. focused = top sessions only, balanced = drops the lowest-quality, comprehensive = no filter (default).\n\n* `focused` - Focused\n* `balanced` - Balanced\n* `comprehensive` - Comprehensive'
+        ),
     provider: zod
         .enum(['google'])
         .describe('* `google` - Google')
@@ -222,6 +229,13 @@ export const VisionScannersPartialUpdateBody = /* @__PURE__ */ zod.object({
         .max(visionScannersPartialUpdateBodySamplingRateMax)
         .optional()
         .describe('0..1 random downsample applied after the query matches. Defaults to 1.0 (no downsampling).'),
+    sampling_mode: zod
+        .enum(['focused', 'balanced', 'comprehensive'])
+        .describe('* `focused` - Focused\n* `balanced` - Balanced\n* `comprehensive` - Comprehensive')
+        .optional()
+        .describe(
+            'Quality pre-filter applied before random sampling. focused = top sessions only, balanced = drops the lowest-quality, comprehensive = no filter (default).\n\n* `focused` - Focused\n* `balanced` - Balanced\n* `comprehensive` - Comprehensive'
+        ),
     provider: zod
         .enum(['google'])
         .describe('* `google` - Google')

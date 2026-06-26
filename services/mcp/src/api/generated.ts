@@ -32237,6 +32237,20 @@ export namespace Schemas {
       results: ReplayObservation[];
     }
 
+    /**
+     * * `focused` - Focused
+     * * `balanced` - Balanced
+     * * `comprehensive` - Comprehensive
+     */
+    export type SamplingModeEnum = typeof SamplingModeEnum[keyof typeof SamplingModeEnum];
+
+
+    export const SamplingModeEnum = {
+      Focused: 'focused',
+      Balanced: 'balanced',
+      Comprehensive: 'comprehensive',
+    } as const;
+
     export interface ReplayScanner {
       readonly id: string;
       /**
@@ -32263,6 +32277,12 @@ export namespace Schemas {
          * @maximum 1
          */
       sampling_rate?: number;
+      /** Quality pre-filter applied before random sampling. focused = top sessions only, balanced = drops the lowest-quality, comprehensive = no filter (default).
+       *
+       * * `focused` - Focused
+       * * `balanced` - Balanced
+       * * `comprehensive` - Comprehensive */
+      sampling_mode?: SamplingModeEnum;
       /** LLM provider. v1 is Google-only.
        *
        * * `google` - Google */
@@ -39938,6 +39958,12 @@ export namespace Schemas {
          * @maximum 1
          */
       sampling_rate?: number;
+      /** Quality pre-filter applied before random sampling. focused = top sessions only, balanced = drops the lowest-quality, comprehensive = no filter (default).
+       *
+       * * `focused` - Focused
+       * * `balanced` - Balanced
+       * * `comprehensive` - Comprehensive */
+      sampling_mode?: SamplingModeEnum;
       /** LLM provider. v1 is Google-only.
        *
        * * `google` - Google */
