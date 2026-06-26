@@ -173,6 +173,11 @@ const config: Config = {
         '^(.+)\\.yaml\\?raw$': '$1.yaml',
         '^~/(.*)$': '<rootDir>/src/$1',
         '^@posthog/hogql-parser$': '<rootDir>/node_modules/@posthog/hogql-parser/dist/index.cjs',
+        // Product packages declare @posthog/icons as a "*" peer dep, so pnpm installs a separate
+        // (often older) copy under products/*/node_modules to satisfy it. A test under a product
+        // dir would resolve that stray copy instead of the one the app actually builds with,
+        // missing newly-added icons. Pin all tests to the frontend's single canonical copy.
+        '^@posthog/icons$': '<rootDir>/node_modules/@posthog/icons',
         // @posthog/hogvm ships as ESM-only; map to the TS source so Jest (Sucrase) can handle it.
         // Required for sidePanelNotificationsLogic.test.ts and other tests with a transitive
         // import chain through src/lib/hog.ts.
