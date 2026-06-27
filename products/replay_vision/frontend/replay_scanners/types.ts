@@ -191,17 +191,17 @@ export const SAMPLING_MODE_OPTIONS: { value: SamplingMode; label: string; descri
     {
         value: 'focused',
         label: 'Focused',
-        description: 'Only top sessions by quality signal — skips routine sessions.',
+        description: 'Only top sessions by quality signal, skipping routine sessions.',
     },
     {
         value: 'balanced',
         label: 'Balanced',
-        description: 'Drops the lowest-quality sessions, keeps a broad mix.',
+        description: 'Drops the lowest-quality sessions and keeps a broad mix.',
     },
     {
         value: 'comprehensive',
         label: 'Comprehensive',
-        description: 'No quality filter — uniform across everything that matches.',
+        description: 'No quality filter. Uniform across everything that matches.',
     },
 ]
 

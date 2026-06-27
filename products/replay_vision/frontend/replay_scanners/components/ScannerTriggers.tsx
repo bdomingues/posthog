@@ -73,6 +73,48 @@ export function ScannerTriggers({ scannerId }: { scannerId: string }): JSX.Eleme
 
     return (
         <div className="space-y-6 max-w-3xl">
+            <LemonField name="query" label="Recording filters">
+                {({ value, onChange }) => {
+                    const query = value as RecordingsQuery | null
+                    const universal = recordingsQueryToUniversalFilters(query)
+                    return (
+                        <div className="space-y-1">
+                            <UniversalFilters
+                                rootKey={`replay-scanner-${scanner.id}`}
+                                group={universal.filter_group}
+                                taxonomicGroupTypes={SCANNER_FILTER_TYPES}
+                                onChange={(filterGroup) => {
+                                    const next = convertUniversalFiltersToRecordingsQuery({
+                                        ...universal,
+                                        filter_group: filterGroup,
+                                    })
+                                    // Overlay only the dimensions this editor controls, so query fields it doesn't
+                                    // render (e.g. session_ids, person_uuid set via API/MCP) survive an edit.
+                                    onChange({
+                                        ...query,
+                                        kind: next.kind,
+                                        events: next.events,
+                                        actions: next.actions,
+                                        properties: next.properties,
+                                        console_log_filters: next.console_log_filters,
+                                        having_predicates: next.having_predicates,
+                                        comment_text: next.comment_text,
+                                        filter_test_accounts: next.filter_test_accounts,
+                                        operand: next.operand,
+                                    })
+                                }}
+                            >
+                                <ScannerFilterGroup />
+                            </UniversalFilters>
+                            <div className="text-xs text-muted">
+                                Filter by event, action, person, session, or cohort. Leave empty to scan all completed
+                                recordings.
+                            </div>
+                        </div>
+                    )
+                }}
+            </LemonField>
+
             <LemonField name="sampling_mode" label="Quality filter">
                 {({ value, onChange }) => {
                     const mode = (value ?? 'comprehensive') as SamplingMode
@@ -90,7 +132,7 @@ export function ScannerTriggers({ scannerId }: { scannerId: string }): JSX.Eleme
                 }}
             </LemonField>
 
-            <LemonField name="sampling_rate" label="Sampling">
+            <LemonField name="sampling_rate" label="Sampling" className="gap-1">
                 {({ value, onChange }) => {
                     const ratio = typeof value === 'number' ? value : 0
                     const samplingPercent = Math.round(ratio * 1000) / 10
@@ -122,48 +164,6 @@ export function ScannerTriggers({ scannerId }: { scannerId: string }): JSX.Eleme
                             <div className="text-xs text-muted">
                                 Each observation counts against your monthly Vision quota.
                             </div>
-                        </div>
-                    )
-                }}
-            </LemonField>
-
-            <LemonField name="query" label="Recording filters">
-                {({ value, onChange }) => {
-                    const query = value as RecordingsQuery | null
-                    const universal = recordingsQueryToUniversalFilters(query)
-                    return (
-                        <div className="space-y-2">
-                            <div className="text-sm text-muted">
-                                Filter by event, action, person, session, or cohort. Leave empty to scan all completed
-                                recordings.
-                            </div>
-                            <UniversalFilters
-                                rootKey={`replay-scanner-${scanner.id}`}
-                                group={universal.filter_group}
-                                taxonomicGroupTypes={SCANNER_FILTER_TYPES}
-                                onChange={(filterGroup) => {
-                                    const next = convertUniversalFiltersToRecordingsQuery({
-                                        ...universal,
-                                        filter_group: filterGroup,
-                                    })
-                                    // Overlay only the dimensions this editor controls, so query fields it doesn't
-                                    // render (e.g. session_ids, person_uuid set via API/MCP) survive an edit.
-                                    onChange({
-                                        ...query,
-                                        kind: next.kind,
-                                        events: next.events,
-                                        actions: next.actions,
-                                        properties: next.properties,
-                                        console_log_filters: next.console_log_filters,
-                                        having_predicates: next.having_predicates,
-                                        comment_text: next.comment_text,
-                                        filter_test_accounts: next.filter_test_accounts,
-                                        operand: next.operand,
-                                    })
-                                }}
-                            >
-                                <ScannerFilterGroup />
-                            </UniversalFilters>
                         </div>
                     )
                 }}
