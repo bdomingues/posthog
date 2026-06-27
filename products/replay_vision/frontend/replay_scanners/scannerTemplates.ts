@@ -135,7 +135,7 @@ export function newScanner(templateKey?: string | null): ReplayScanner {
         id: 'new',
         enabled: true,
         sampling_rate: 1,
-        sampling_mode: 'balanced' as const,
+        sampling_mode: 'comprehensive' as const,
         query: { kind: NodeKind.RecordingsQuery },
         provider: DEFAULT_PROVIDER,
         model: DEFAULT_MODEL,
