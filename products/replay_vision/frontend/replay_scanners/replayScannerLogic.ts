@@ -2,7 +2,6 @@ import equal from 'fast-deep-equal'
 import { actions, afterMount, isBreakpoint, kea, key, listeners, path, props, reducers, selectors } from 'kea'
 import { forms } from 'kea-forms'
 import { actionToUrl, router, urlToAction } from 'kea-router'
-import posthog from 'posthog-js'
 
 import { dayjs } from 'lib/dayjs'
 import { lemonToast } from 'lib/lemon-ui/LemonToast'
@@ -670,17 +669,10 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
             // and rapid filter edits don't fire one request per tick.
             setScannerValue: () => actions.requestScannerEstimate(),
             setScannerValues: () => actions.requestScannerEstimate(),
-            submitScannerSuccess: ({ scanner }: { scanner: ReplayScanner }) => {
+            submitScannerSuccess: () => {
                 actions.requestScannerEstimate()
                 // Saving recomputes the persisted estimate, which shifts the org-wide fleet sum.
                 visionQuotaLogic.findMounted()?.actions.loadQuota()
-                posthog.capture('replay vision scanner saved', {
-                    scanner_id: scanner.id,
-                    scanner_type: scanner.scanner_type,
-                    sampling_mode: scanner.sampling_mode,
-                    sampling_rate: scanner.sampling_rate,
-                    is_new: props.id === 'new',
-                })
             },
 
             requestScannerEstimate: () => {
