@@ -26,6 +26,7 @@ from posthog.comment.formatting import (
     rich_content_to_markdown,
     rich_content_to_slack_payload,
 )
+from posthog.helpers.slack_identity import resolve_slack_avatar_by_email
 from posthog.models.comment import Comment as CommentModel
 from posthog.models.team import Team
 from posthog.models.uploaded_media import UploadedMedia
@@ -64,7 +65,6 @@ from products.conversations.backend.slack import (
     handle_support_mention,
     handle_support_message,
     handle_support_reaction,
-    resolve_slack_avatar_by_email,
     ticket_created_text,
 )
 from products.conversations.backend.support_teams import (
