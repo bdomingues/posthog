@@ -52,6 +52,7 @@ from posthog.user_permissions import UserPermissions
 from posthog.utils import get_instance_region
 
 from products.slack_app.backend import inbox_channel, onboarding
+from products.slack_app.backend.discussion_replies import try_ingest_discussion_reply
 from products.slack_app.backend.feature_flags import slack_oauth_link_enabled
 from products.slack_app.backend.models import SlackChannel, SlackThreadTaskMapping
 from products.slack_app.backend.services import inbox_interactivity
@@ -1786,6 +1787,12 @@ def route_posthog_code_event_to_relevant_region(
         )
         if region_route is not None:
             return region_route
+
+        # A reply on a thread that mirrors a PostHog discussion becomes a comment, not agent work.
+        if event_type == "message" and try_ingest_discussion_reply(
+            event, workspace_result.candidates, channel_str, thread_ts_str, slack_team_id
+        ):
+            return ROUTE_HANDLED_LOCALLY
 
         # Threads we don't own (and orgs that haven't opted in) are dropped here
         # so the rest of the pipeline only runs for actionable messages.
