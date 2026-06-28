@@ -725,6 +725,13 @@ export interface PaginatedChangeRequestListApi {
     results: ChangeRequestApi[]
 }
 
+export interface CommentSlackThreadRefApi {
+    /** Slack channel ID this discussion is mirrored to. */
+    channel_id: string
+    /** Deep link that opens the mirrored Slack thread. */
+    url: string
+}
+
 export interface CommentApi {
     readonly id: string
     readonly created_by: UserBasicApi
@@ -736,6 +743,8 @@ export interface CommentApi {
     is_task?: boolean
     /** The user who marked this task complete. Null for open tasks and non-task comments. */
     readonly completed_by: UserBasicApi | null
+    /** The Slack thread this comment's discussion is mirrored to, or null. Set only on a tracked thread-root comment; used to surface an 'Open in Slack' link and hide re-sending. */
+    readonly slack_thread: CommentSlackThreadRefApi | null
     /** @nullable */
     content?: string | null
     rich_content?: unknown
@@ -777,6 +786,8 @@ export interface PatchedCommentApi {
     is_task?: boolean
     /** The user who marked this task complete. Null for open tasks and non-task comments. */
     readonly completed_by?: UserBasicApi | null
+    /** The Slack thread this comment's discussion is mirrored to, or null. Set only on a tracked thread-root comment; used to surface an 'Open in Slack' link and hide re-sending. */
+    readonly slack_thread?: CommentSlackThreadRefApi | null
     /** @nullable */
     content?: string | null
     rich_content?: unknown
@@ -797,6 +808,39 @@ export interface PatchedCommentApi {
     readonly completed_at?: string | null
     /** @nullable */
     source_comment?: string | null
+}
+
+export interface SendCommentToSlackApi {
+    /** ID of the Slack integration (kind='slack') whose bot posts the thread. */
+    integration_id: number
+    /** Slack channel ID to create the mirrored thread in. The bot must be a member of the channel. */
+    channel_id: string
+}
+
+export interface CommentSlackThreadApi {
+    readonly id: string
+    /** Resource type of the mirrored discussion (e.g. Insight). */
+    readonly scope: string
+    /**
+     * ID of the resource the discussion is attached to.
+     * @nullable
+     */
+    readonly item_id: string | null
+    /** The thread-root comment whose replies mirror to the Slack thread. */
+    readonly source_comment: string
+    /** Slack integration used to post to and read from the thread. */
+    readonly integration: number
+    /** Slack channel the mirrored thread lives in. */
+    readonly slack_channel_id: string
+    /** Slack thread timestamp anchoring the mirrored thread. */
+    readonly slack_thread_ts: string
+    /**
+     * Slack workspace ID, used to route inbound replies back.
+     * @nullable
+     */
+    readonly slack_team_id: string | null
+    readonly created_at: string
+    readonly created_by: UserBasicApi
 }
 
 export interface PinnedSceneTabApi {
