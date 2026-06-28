@@ -20,6 +20,12 @@ import requests
 import structlog
 from celery import shared_task
 
+from posthog.comment.formatting import (
+    extract_images_from_rich_content,
+    rich_content_to_html,
+    rich_content_to_markdown,
+    rich_content_to_slack_payload,
+)
 from posthog.models.comment import Comment as CommentModel
 from posthog.models.team import Team
 from posthog.models.uploaded_media import UploadedMedia
@@ -28,12 +34,6 @@ from posthog.storage import object_storage
 
 from products.conversations.backend.cache import NUDGE_DISMISS_TTL, suppress_nudge
 from products.conversations.backend.events import capture_ticket_status_changed
-from products.conversations.backend.formatting import (
-    extract_images_from_rich_content,
-    rich_content_to_html,
-    rich_content_to_markdown,
-    rich_content_to_slack_payload,
-)
 from products.conversations.backend.mailgun import (
     MailgunDomainNotRegistered,
     MailgunNotConfigured,
