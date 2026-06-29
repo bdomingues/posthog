@@ -166,13 +166,8 @@ function ImpersonationNoticeContent(): JSX.Element {
                       </span>
                   ),
                   disabledReason: isChangingUser ? 'Switching user…' : undefined,
-                  onClick: () => {
-                      if (storedReason?.trim()) {
-                          changeUser(member.user.id)
-                      } else {
-                          setPendingUserId(member.user.id)
-                      }
-                  },
+                  // Always confirm via the modal (reason pre-filled) rather than switching silently.
+                  onClick: () => setPendingUserId(member.user.id),
               }))
 
     const handleSessionExpired = (): void => {
@@ -212,8 +207,14 @@ function ImpersonationNoticeContent(): JSX.Element {
                     items={changeUserItems}
                     onVisibilityChange={(visible) => visible && ensureAllMembersLoaded()}
                 >
-                    <LemonButton type="secondary" size="small" sideIcon={<IconChevronDown />} loading={isChangingUser}>
-                        Change user
+                    <LemonButton
+                        type="secondary"
+                        size="small"
+                        sideIcon={<IconChevronDown />}
+                        loading={isChangingUser}
+                        tooltip="Change user"
+                    >
+                        User
                     </LemonButton>
                 </LemonMenu>
                 <LemonButton
@@ -271,6 +272,7 @@ function ImpersonationNoticeContent(): JSX.Element {
                 description="Provide a reason for impersonating this user."
                 confirmText="Switch user"
                 loading={isChangingUser}
+                initialReason={storedReason ?? ''}
             />
         </>
     )
