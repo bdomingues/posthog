@@ -15,6 +15,8 @@ import { membershipLevelToName } from 'lib/utils/permissioning'
 import { capitalizeFirstLetter, fullName } from 'lib/utils/strings'
 import { userLogic } from 'scenes/userLogic'
 
+import { OrganizationMemberType } from '~/types'
+
 import { AdminLoginButtons } from './AdminLoginButtons'
 import {
     AdminLoginUrl,
@@ -23,6 +25,21 @@ import {
     impersonationNoticeLogic,
 } from './impersonationNoticeLogic'
 import { ImpersonationReasonModal } from './ImpersonationReasonModal'
+
+// One row in the "Change user" dropdown: name on top, email beneath in muted text, level pill on the right.
+export function ChangeUserMenuItemLabel({ member }: { member: OrganizationMemberType }): JSX.Element {
+    return (
+        <span className="flex items-center gap-2 justify-between w-full">
+            <span className="flex flex-col">
+                <span>{fullName(member.user)}</span>
+                <span className="text-xs text-muted">{member.user.email}</span>
+            </span>
+            <LemonTag>
+                {capitalizeFirstLetter(membershipLevelToName.get(member.level) ?? `unknown (${member.level})`)}
+            </LemonTag>
+        </span>
+    )
+}
 
 function CountDown({ datetime, callback }: { datetime: dayjs.Dayjs; callback?: () => void }): JSX.Element {
     const [now, setNow] = useState(() => dayjs())
@@ -153,19 +170,7 @@ function ImpersonationNoticeContent(): JSX.Element {
             ? [{ label: membersLoading ? 'Loading…' : 'No other members', disabledReason: ' ' }]
             : changeableMembers.map((member) => ({
                   key: member.user.uuid,
-                  label: (
-                      <span className="flex items-center gap-2 justify-between w-full">
-                          <span className="flex flex-col">
-                              <span>{fullName(member.user)}</span>
-                              <span className="text-xs text-muted">{member.user.email}</span>
-                          </span>
-                          <LemonTag>
-                              {capitalizeFirstLetter(
-                                  membershipLevelToName.get(member.level) ?? `unknown (${member.level})`
-                              )}
-                          </LemonTag>
-                      </span>
-                  ),
+                  label: <ChangeUserMenuItemLabel member={member} />,
                   disabledReason: isChangingUser ? 'Switching user…' : undefined,
                   // Always confirm via the modal (reason pre-filled) rather than switching silently.
                   onClick: () => setPendingUserId(member.user.id),
