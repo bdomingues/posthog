@@ -9,6 +9,24 @@ feature: data_warehouse
 url_prefix: /sql
 ui_apps: {}
 tools:
+    custom-oauth2-integrations-create:
+        operation: custom_oauth2_integrations_create
+        enabled: false
+    custom-oauth2-integrations-destroy:
+        operation: custom_oauth2_integrations_destroy
+        enabled: false
+    custom-oauth2-integrations-list:
+        operation: custom_oauth2_integrations_list
+        enabled: false
+    custom-oauth2-integrations-partial-update:
+        operation: custom_oauth2_integrations_partial_update
+        enabled: false
+    custom-oauth2-integrations-retrieve:
+        operation: custom_oauth2_integrations_retrieve
+        enabled: false
+    custom-oauth2-integrations-update:
+        operation: custom_oauth2_integrations_update
+        enabled: false
     data-modeling-jobs-list:
         operation: data_modeling_jobs_list
         enabled: false
