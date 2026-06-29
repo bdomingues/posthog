@@ -74,3 +74,40 @@ def upgrade_impersonation(request):
     )
 
     return JsonResponse({"success": True})
+
+
+@require_http_methods(["POST"])
+def downgrade_impersonation(request):
+    """Downgrade from read-write to read-only impersonation"""
+    if not is_impersonated_session(request) or is_read_only_impersonation(request):
+        raise Http404()
+
+    try:
+        data = json.loads(request.body)
+        reason = data.get("reason", "").strip()
+    except (json.JSONDecodeError, AttributeError):
+        reason = ""
+
+    if not reason:
+        return JsonResponse({"error": "A reason is required to downgrade impersonation"}, status=400)
+
+    staff_user = get_original_user_from_session(request)
+    if not staff_user or not staff_user.is_staff:
+        return JsonResponse({"error": "Unable to downgrade impersonation"}, status=400)
+
+    request.session[IMPERSONATION_READ_ONLY_SESSION_KEY] = True
+    request.session.modified = True
+
+    posthoganalytics.capture(
+        distinct_id=str(staff_user.distinct_id),
+        event="impersonation_downgraded",
+        properties={
+            "staff_user_id": staff_user.id,
+            "staff_user_email": staff_user.email,
+            "target_user_id": request.user.id,
+            "target_user_email": request.user.email,
+            "reason": reason,
+        },
+    )
+
+    return JsonResponse({"success": True})
