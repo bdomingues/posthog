@@ -926,4 +926,31 @@ describe('impersonationNoticeLogic', () => {
                 .toMatchValues({ isDowngradeModalOpen: false })
         })
     })
+
+    describe('reason seeding from the user API', () => {
+        it('seeds the cached reason from is_impersonated_reason on loadUserSuccess', async () => {
+            expect(getStoredImpersonationReason(MOCK_IMPERSONATED_USER.id)).toBeNull()
+
+            await expectLogic(logic, () => {
+                userLogic.actions.loadUserSuccess({
+                    ...MOCK_IMPERSONATED_USER,
+                    is_impersonated_reason: 'reason from the django admin',
+                })
+            }).toFinishAllListeners()
+
+            expect(getStoredImpersonationReason(MOCK_IMPERSONATED_USER.id)).toBe('reason from the django admin')
+        })
+
+        it('does not seed when the user is not impersonated', async () => {
+            await expectLogic(logic, () => {
+                userLogic.actions.loadUserSuccess({
+                    ...MOCK_DEFAULT_USER,
+                    is_impersonated: false,
+                    is_impersonated_reason: 'should not be seeded',
+                })
+            }).toFinishAllListeners()
+
+            expect(getStoredImpersonationReason(MOCK_DEFAULT_USER.id)).toBeNull()
+        })
+    })
 })

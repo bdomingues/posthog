@@ -1,4 +1,4 @@
-import { actions, connect, kea, listeners, path, reducers, selectors } from 'kea'
+import { actions, afterMount, connect, kea, listeners, path, reducers, selectors } from 'kea'
 import { urlToAction } from 'kea-router'
 
 import { lemonToast } from '@posthog/lemon-ui'
@@ -12,7 +12,12 @@ import { userLogic } from 'scenes/userLogic'
 
 import { OrganizationMemberType, Region, UserType } from '~/types'
 
-import { adminLoginAs, clearAllStoredImpersonationReasons, getStoredImpersonationReason } from './adminLoginAs'
+import {
+    adminLoginAs,
+    clearAllStoredImpersonationReasons,
+    getStoredImpersonationReason,
+    setStoredImpersonationReason,
+} from './adminLoginAs'
 import type { impersonationNoticeLogicType } from './impersonationNoticeLogicType'
 
 export interface ExpiredSessionInfo {
@@ -43,6 +48,15 @@ const ADMIN_LOOKUP_REGIONS: Region[] = [Region.US, Region.EU]
 function adminLoginUrlForRegion(region: Region, email: string): string {
     const domain = CLOUD_HOSTNAMES[region]
     return `https://${domain}/admin/posthog/user/?q=${encodeURIComponent(email)}`
+}
+
+function seedStoredReasonFromUser(user: UserType | null): void {
+    // Bridge the server-side reason (set on both Django-admin and in-app starts) into the
+    // localStorage cache, so the reason is available for autofill regardless of how the
+    // impersonation session began.
+    if (user?.is_impersonated && user.is_impersonated_reason && user.id != null) {
+        setStoredImpersonationReason(user.id, user.is_impersonated_reason)
+    }
 }
 
 export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
@@ -249,6 +263,8 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
             }
         },
         loadUserSuccess: ({ user }) => {
+            seedStoredReasonFromUser(user)
+
             const { expiredSessionInfo } = values
             if (!expiredSessionInfo) {
                 return
@@ -308,4 +324,9 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
             }
         },
     })),
+
+    afterMount(({ values }) => {
+        // Seed from a user already loaded before this logic mounted (loadUserSuccess covers later loads).
+        seedStoredReasonFromUser(values.user)
+    }),
 ])
