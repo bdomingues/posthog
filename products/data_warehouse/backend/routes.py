@@ -4,6 +4,7 @@ import products.data_warehouse.backend.presentation.views.fix_hogql as fix_hogql
 from products.data_warehouse.backend.presentation.views import (
     column_annotation,
     column_statistics,
+    custom_oauth2_integration,
     data_modeling_job,
     data_warehouse,
     external_data_schema,
@@ -92,5 +93,11 @@ def register_routes(routers: RouterRegistry) -> None:
         r"warehouse_column_statistics",
         column_statistics.WarehouseColumnStatisticsViewSet,
         "project_warehouse_column_statistics",
+        ["team_id"],
+    )
+    routers.projects.register(
+        r"custom_oauth2_integrations",
+        custom_oauth2_integration.CustomOAuth2IntegrationViewSet,
+        "project_custom_oauth2_integrations",
         ["team_id"],
     )

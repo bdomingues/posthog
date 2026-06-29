@@ -10,6 +10,8 @@ import { apiMutator } from '../../../../frontend/src/lib/api-orval-mutator'
  */
 import type {
     CheckDatabaseNameResponseApi,
+    CustomOAuth2IntegrationApi,
+    CustomOauth2IntegrationsListParams,
     DataModelingJobApi,
     DataModelingJobsListParams,
     DataWarehouseCheckDatabaseNameRetrieveParams,
@@ -23,6 +25,7 @@ import type {
     FixHogqlListParams,
     InsightVariableApi,
     InsightVariablesListParams,
+    PaginatedCustomOAuth2IntegrationListApi,
     PaginatedDataModelingJobListApi,
     PaginatedDataWarehouseModelPathListApi,
     PaginatedDataWarehouseSavedQueryDraftListApi,
@@ -33,6 +36,7 @@ import type {
     PaginatedViewLinkListApi,
     PaginatedWarehouseColumnAnnotationListApi,
     PaginatedWarehouseColumnStatisticsListApi,
+    PatchedCustomOAuth2IntegrationApi,
     PatchedDataWarehouseSavedQueryApi,
     PatchedDataWarehouseSavedQueryDraftApi,
     PatchedDataWarehouseSavedQueryFolderApi,
@@ -78,6 +82,164 @@ type NonReadonly<T> = [T] extends [UnionToIntersection<T>]
           [P in keyof Writable<T>]: T[P] extends object ? NonReadonly<NonNullable<T[P]>> : T[P]
       }
     : DistributeReadOnlyOverUnions<T>
+
+export const getCustomOauth2IntegrationsListUrl = (projectId: string, params?: CustomOauth2IntegrationsListParams) => {
+    const normalizedParams = new URLSearchParams()
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+        if (value !== undefined) {
+            normalizedParams.append(key, value === null ? 'null' : String(value))
+        }
+    })
+
+    const stringifiedParams = normalizedParams.toString()
+
+    return stringifiedParams.length > 0
+        ? `/api/projects/${projectId}/custom_oauth2_integrations/?${stringifiedParams}`
+        : `/api/projects/${projectId}/custom_oauth2_integrations/`
+}
+
+/**
+ * Manage the customer-owned OAuth2 integrations that back custom REST sources.
+ *
+ * Create one, then point a custom source at it via the source's `auth_oauth2_integration_id`. PATCH a
+ * new `refresh_token` (or `client_secret`) to reconnect a source whose token expired or was revoked —
+ * that clears the broken-token error without rebuilding the source. Secrets are write-only and never
+ * returned; reads expose the non-secret config plus presence booleans.
+ */
+export const customOauth2IntegrationsList = async (
+    projectId: string,
+    params?: CustomOauth2IntegrationsListParams,
+    options?: RequestInit
+): Promise<PaginatedCustomOAuth2IntegrationListApi> => {
+    return apiMutator<PaginatedCustomOAuth2IntegrationListApi>(getCustomOauth2IntegrationsListUrl(projectId, params), {
+        ...options,
+        method: 'GET',
+    })
+}
+
+export const getCustomOauth2IntegrationsCreateUrl = (projectId: string) => {
+    return `/api/projects/${projectId}/custom_oauth2_integrations/`
+}
+
+/**
+ * Manage the customer-owned OAuth2 integrations that back custom REST sources.
+ *
+ * Create one, then point a custom source at it via the source's `auth_oauth2_integration_id`. PATCH a
+ * new `refresh_token` (or `client_secret`) to reconnect a source whose token expired or was revoked —
+ * that clears the broken-token error without rebuilding the source. Secrets are write-only and never
+ * returned; reads expose the non-secret config plus presence booleans.
+ */
+export const customOauth2IntegrationsCreate = async (
+    projectId: string,
+    customOAuth2IntegrationApi?: NonReadonly<CustomOAuth2IntegrationApi>,
+    options?: RequestInit
+): Promise<CustomOAuth2IntegrationApi> => {
+    return apiMutator<CustomOAuth2IntegrationApi>(getCustomOauth2IntegrationsCreateUrl(projectId), {
+        ...options,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        body: JSON.stringify(customOAuth2IntegrationApi),
+    })
+}
+
+export const getCustomOauth2IntegrationsRetrieveUrl = (projectId: string, id: string) => {
+    return `/api/projects/${projectId}/custom_oauth2_integrations/${id}/`
+}
+
+/**
+ * Manage the customer-owned OAuth2 integrations that back custom REST sources.
+ *
+ * Create one, then point a custom source at it via the source's `auth_oauth2_integration_id`. PATCH a
+ * new `refresh_token` (or `client_secret`) to reconnect a source whose token expired or was revoked —
+ * that clears the broken-token error without rebuilding the source. Secrets are write-only and never
+ * returned; reads expose the non-secret config plus presence booleans.
+ */
+export const customOauth2IntegrationsRetrieve = async (
+    projectId: string,
+    id: string,
+    options?: RequestInit
+): Promise<CustomOAuth2IntegrationApi> => {
+    return apiMutator<CustomOAuth2IntegrationApi>(getCustomOauth2IntegrationsRetrieveUrl(projectId, id), {
+        ...options,
+        method: 'GET',
+    })
+}
+
+export const getCustomOauth2IntegrationsUpdateUrl = (projectId: string, id: string) => {
+    return `/api/projects/${projectId}/custom_oauth2_integrations/${id}/`
+}
+
+/**
+ * Manage the customer-owned OAuth2 integrations that back custom REST sources.
+ *
+ * Create one, then point a custom source at it via the source's `auth_oauth2_integration_id`. PATCH a
+ * new `refresh_token` (or `client_secret`) to reconnect a source whose token expired or was revoked —
+ * that clears the broken-token error without rebuilding the source. Secrets are write-only and never
+ * returned; reads expose the non-secret config plus presence booleans.
+ */
+export const customOauth2IntegrationsUpdate = async (
+    projectId: string,
+    id: string,
+    customOAuth2IntegrationApi?: NonReadonly<CustomOAuth2IntegrationApi>,
+    options?: RequestInit
+): Promise<CustomOAuth2IntegrationApi> => {
+    return apiMutator<CustomOAuth2IntegrationApi>(getCustomOauth2IntegrationsUpdateUrl(projectId, id), {
+        ...options,
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        body: JSON.stringify(customOAuth2IntegrationApi),
+    })
+}
+
+export const getCustomOauth2IntegrationsPartialUpdateUrl = (projectId: string, id: string) => {
+    return `/api/projects/${projectId}/custom_oauth2_integrations/${id}/`
+}
+
+/**
+ * Manage the customer-owned OAuth2 integrations that back custom REST sources.
+ *
+ * Create one, then point a custom source at it via the source's `auth_oauth2_integration_id`. PATCH a
+ * new `refresh_token` (or `client_secret`) to reconnect a source whose token expired or was revoked —
+ * that clears the broken-token error without rebuilding the source. Secrets are write-only and never
+ * returned; reads expose the non-secret config plus presence booleans.
+ */
+export const customOauth2IntegrationsPartialUpdate = async (
+    projectId: string,
+    id: string,
+    patchedCustomOAuth2IntegrationApi?: NonReadonly<PatchedCustomOAuth2IntegrationApi>,
+    options?: RequestInit
+): Promise<CustomOAuth2IntegrationApi> => {
+    return apiMutator<CustomOAuth2IntegrationApi>(getCustomOauth2IntegrationsPartialUpdateUrl(projectId, id), {
+        ...options,
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        body: JSON.stringify(patchedCustomOAuth2IntegrationApi),
+    })
+}
+
+export const getCustomOauth2IntegrationsDestroyUrl = (projectId: string, id: string) => {
+    return `/api/projects/${projectId}/custom_oauth2_integrations/${id}/`
+}
+
+/**
+ * Manage the customer-owned OAuth2 integrations that back custom REST sources.
+ *
+ * Create one, then point a custom source at it via the source's `auth_oauth2_integration_id`. PATCH a
+ * new `refresh_token` (or `client_secret`) to reconnect a source whose token expired or was revoked —
+ * that clears the broken-token error without rebuilding the source. Secrets are write-only and never
+ * returned; reads expose the non-secret config plus presence booleans.
+ */
+export const customOauth2IntegrationsDestroy = async (
+    projectId: string,
+    id: string,
+    options?: RequestInit
+): Promise<void> => {
+    return apiMutator<void>(getCustomOauth2IntegrationsDestroyUrl(projectId, id), {
+        ...options,
+        method: 'DELETE',
+    })
+}
 
 export const getDataModelingJobsListUrl = (projectId: string, params?: DataModelingJobsListParams) => {
     const normalizedParams = new URLSearchParams()

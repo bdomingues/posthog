@@ -12645,6 +12645,18 @@ export namespace Schemas {
     }
 
     /**
+     * * `body` - body
+     * * `basic` - basic
+     */
+    export type ClientAuthMethodEnum = typeof ClientAuthMethodEnum[keyof typeof ClientAuthMethodEnum];
+
+
+    export const ClientAuthMethodEnum = {
+      Body: 'body',
+      Basic: 'basic',
+    } as const;
+
+    /**
      * Body shape for POST /revisions/<id>/clone_from/ — copy every file
      * from `source_revision_id` into this (draft) revision.
      */
@@ -14089,6 +14101,108 @@ export namespace Schemas {
       target_display_name: string;
       /** canonical or team_custom */
       source: string;
+    }
+
+    /**
+     * Extra form params added to the token request body (e.g. an 'audience' some providers require).
+     */
+    export type CustomOAuth2ConfigExtraTokenRequestParams = {[key: string]: string};
+
+    /**
+     * Extra headers sent on the token request, for providers that need them.
+     */
+    export type CustomOAuth2ConfigTokenRequestHeaders = {[key: string]: string};
+
+    /**
+     * * `client_credentials` - client_credentials
+     * * `refresh_token` - refresh_token
+     */
+    export type GrantTypeEnum = typeof GrantTypeEnum[keyof typeof GrantTypeEnum];
+
+
+    export const GrantTypeEnum = {
+      ClientCredentials: 'client_credentials',
+      RefreshToken: 'refresh_token',
+    } as const;
+
+    /**
+     * The non-secret OAuth2 client config — the exact knobs the worker's OAuth2 auth engine accepts.
+     *
+     * Only the fields declared here round-trip; unknown keys are dropped on write (so the API can't pollute
+     * the stored config) and hidden on read. Secrets (client_secret, refresh_token) are never part of this.
+     */
+    export interface CustomOAuth2Config {
+      /** OAuth2 client ID of the customer-owned client. */
+      client_id: string;
+      /** Token endpoint the worker POSTs to mint access tokens. Receives the client secret, so it must be a trusted public host; internal/loopback hosts are rejected. */
+      token_url: string;
+      /** OAuth2 grant. client_credentials (machine-to-machine) or refresh_token (a pre-obtained refresh token the customer supplies). authorization_code is not supported.
+       *
+       * * `client_credentials` - client_credentials
+       * * `refresh_token` - refresh_token */
+      grant_type?: GrantTypeEnum;
+      /**
+         * Space-separated OAuth2 scopes, if the provider needs them.
+         * @nullable
+         */
+      scopes?: string | null;
+      /**
+         * Response field holding the access token, when it isn't the standard 'access_token'.
+         * @nullable
+         */
+      access_token_name?: string | null;
+      /**
+         * Response field holding the token TTL, when it isn't the standard 'expires_in'.
+         * @nullable
+         */
+      expires_in_name?: string | null;
+      /**
+         * strptime format to parse an absolute-datetime expiry, for providers that return one instead of a TTL in seconds.
+         * @nullable
+         */
+      expiry_date_format?: string | null;
+      /** Extra form params added to the token request body (e.g. an 'audience' some providers require). */
+      extra_token_request_params?: CustomOAuth2ConfigExtraTokenRequestParams;
+      /** Extra headers sent on the token request, for providers that need them. */
+      token_request_headers?: CustomOAuth2ConfigTokenRequestHeaders;
+      /** How the client credentials are sent: 'body' (form params) or 'basic' (HTTP Basic).
+       *
+       * * `body` - body
+       * * `basic` - basic */
+      client_auth_method?: ClientAuthMethodEnum;
+      /** Unix seconds of the last successful token mint, set by the sync worker. */
+      readonly refreshed_at: number;
+    }
+
+    /**
+     * Read/write a custom REST source's customer-owned OAuth2 integration.
+     *
+     * The encrypted `sensitive_config` (client secret + tokens) is deliberately absent from `fields` —
+     * redaction by omission. Secrets are accepted as write-only inputs and never returned; the stored
+     * booleans below report presence only.
+     */
+    export interface CustomOAuth2Integration {
+      readonly id: string;
+      /**
+         * The custom source this integration backs, if already created. The source points back via its `auth_oauth2_integration_id`; this is the reverse link for cleanup and the unique constraint.
+         * @nullable
+         */
+      external_data_source?: string | null;
+      /** Non-secret OAuth2 client config. Required on create. */
+      config?: CustomOAuth2Config;
+      /** OAuth2 client secret (write-only; never returned). Provide on create or to reconnect. */
+      client_secret?: string;
+      /** Pre-obtained refresh token for the refresh_token grant (write-only; never returned). PATCH a new value to reconnect a source whose refresh token expired or was revoked. */
+      refresh_token?: string;
+      /** Whether a client secret is stored (the secret itself is never returned). */
+      readonly has_client_secret: boolean;
+      /** Whether a refresh token is stored (the secret itself is never returned). */
+      readonly has_refresh_token: boolean;
+      /** Non-empty (TOKEN_REFRESH_FAILED) while the stored token is failing to refresh; cleared on a successful reconnect or sync. */
+      readonly errors: string;
+      readonly created_at: string;
+      /** @nullable */
+      readonly updated_at: string | null;
     }
 
     /**
@@ -31139,6 +31253,15 @@ export namespace Schemas {
       results: CoreEvent[];
     }
 
+    export interface PaginatedCustomOAuth2IntegrationList {
+      count: number;
+      /** @nullable */
+      next?: string | null;
+      /** @nullable */
+      previous?: string | null;
+      results: CustomOAuth2Integration[];
+    }
+
     export interface PaginatedCustomPropertyDefinitionList {
       count: number;
       /** @nullable */
@@ -36216,6 +36339,37 @@ export namespace Schemas {
       filter?: unknown;
       readonly created_at?: string;
       readonly updated_at?: string;
+    }
+
+    /**
+     * Read/write a custom REST source's customer-owned OAuth2 integration.
+     *
+     * The encrypted `sensitive_config` (client secret + tokens) is deliberately absent from `fields` —
+     * redaction by omission. Secrets are accepted as write-only inputs and never returned; the stored
+     * booleans below report presence only.
+     */
+    export interface PatchedCustomOAuth2Integration {
+      readonly id?: string;
+      /**
+         * The custom source this integration backs, if already created. The source points back via its `auth_oauth2_integration_id`; this is the reverse link for cleanup and the unique constraint.
+         * @nullable
+         */
+      external_data_source?: string | null;
+      /** Non-secret OAuth2 client config. Required on create. */
+      config?: CustomOAuth2Config;
+      /** OAuth2 client secret (write-only; never returned). Provide on create or to reconnect. */
+      client_secret?: string;
+      /** Pre-obtained refresh token for the refresh_token grant (write-only; never returned). PATCH a new value to reconnect a source whose refresh token expired or was revoked. */
+      refresh_token?: string;
+      /** Whether a client secret is stored (the secret itself is never returned). */
+      readonly has_client_secret?: boolean;
+      /** Whether a refresh token is stored (the secret itself is never returned). */
+      readonly has_refresh_token?: boolean;
+      /** Non-empty (TOKEN_REFRESH_FAILED) while the stored token is failing to refresh; cleared on a successful reconnect or sync. */
+      readonly errors?: string;
+      readonly created_at?: string;
+      /** @nullable */
+      readonly updated_at?: string | null;
     }
 
     /**
@@ -60999,6 +61153,17 @@ export namespace Schemas {
     };
 
     export type CoreMemoryListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number;
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number;
+    };
+
+    export type CustomOauth2IntegrationsListParams = {
     /**
      * Number of results to return per page.
      */

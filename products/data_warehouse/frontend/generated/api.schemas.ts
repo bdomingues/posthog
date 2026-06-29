@@ -8,6 +8,158 @@
  * OpenAPI spec version: 1.0.0
  */
 /**
+ * * `client_credentials` - client_credentials
+ * * `refresh_token` - refresh_token
+ */
+export type GrantTypeEnumApi = (typeof GrantTypeEnumApi)[keyof typeof GrantTypeEnumApi]
+
+export const GrantTypeEnumApi = {
+    ClientCredentials: 'client_credentials',
+    RefreshToken: 'refresh_token',
+} as const
+
+/**
+ * * `body` - body
+ * * `basic` - basic
+ */
+export type ClientAuthMethodEnumApi = (typeof ClientAuthMethodEnumApi)[keyof typeof ClientAuthMethodEnumApi]
+
+export const ClientAuthMethodEnumApi = {
+    Body: 'body',
+    Basic: 'basic',
+} as const
+
+/**
+ * Extra form params added to the token request body (e.g. an 'audience' some providers require).
+ */
+export type CustomOAuth2ConfigApiExtraTokenRequestParams = { [key: string]: string }
+
+/**
+ * Extra headers sent on the token request, for providers that need them.
+ */
+export type CustomOAuth2ConfigApiTokenRequestHeaders = { [key: string]: string }
+
+/**
+ * The non-secret OAuth2 client config — the exact knobs the worker's OAuth2 auth engine accepts.
+ *
+ * Only the fields declared here round-trip; unknown keys are dropped on write (so the API can't pollute
+ * the stored config) and hidden on read. Secrets (client_secret, refresh_token) are never part of this.
+ */
+export interface CustomOAuth2ConfigApi {
+    /** OAuth2 client ID of the customer-owned client. */
+    client_id: string
+    /** Token endpoint the worker POSTs to mint access tokens. Receives the client secret, so it must be a trusted public host; internal/loopback hosts are rejected. */
+    token_url: string
+    /** OAuth2 grant. client_credentials (machine-to-machine) or refresh_token (a pre-obtained refresh token the customer supplies). authorization_code is not supported.
+     *
+     * * `client_credentials` - client_credentials
+     * * `refresh_token` - refresh_token */
+    grant_type?: GrantTypeEnumApi
+    /**
+     * Space-separated OAuth2 scopes, if the provider needs them.
+     * @nullable
+     */
+    scopes?: string | null
+    /**
+     * Response field holding the access token, when it isn't the standard 'access_token'.
+     * @nullable
+     */
+    access_token_name?: string | null
+    /**
+     * Response field holding the token TTL, when it isn't the standard 'expires_in'.
+     * @nullable
+     */
+    expires_in_name?: string | null
+    /**
+     * strptime format to parse an absolute-datetime expiry, for providers that return one instead of a TTL in seconds.
+     * @nullable
+     */
+    expiry_date_format?: string | null
+    /** Extra form params added to the token request body (e.g. an 'audience' some providers require). */
+    extra_token_request_params?: CustomOAuth2ConfigApiExtraTokenRequestParams
+    /** Extra headers sent on the token request, for providers that need them. */
+    token_request_headers?: CustomOAuth2ConfigApiTokenRequestHeaders
+    /** How the client credentials are sent: 'body' (form params) or 'basic' (HTTP Basic).
+     *
+     * * `body` - body
+     * * `basic` - basic */
+    client_auth_method?: ClientAuthMethodEnumApi
+    /** Unix seconds of the last successful token mint, set by the sync worker. */
+    readonly refreshed_at: number
+}
+
+/**
+ * Read/write a custom REST source's customer-owned OAuth2 integration.
+ *
+ * The encrypted `sensitive_config` (client secret + tokens) is deliberately absent from `fields` —
+ * redaction by omission. Secrets are accepted as write-only inputs and never returned; the stored
+ * booleans below report presence only.
+ */
+export interface CustomOAuth2IntegrationApi {
+    readonly id: string
+    /**
+     * The custom source this integration backs, if already created. The source points back via its `auth_oauth2_integration_id`; this is the reverse link for cleanup and the unique constraint.
+     * @nullable
+     */
+    external_data_source?: string | null
+    /** Non-secret OAuth2 client config. Required on create. */
+    config?: CustomOAuth2ConfigApi
+    /** OAuth2 client secret (write-only; never returned). Provide on create or to reconnect. */
+    client_secret?: string
+    /** Pre-obtained refresh token for the refresh_token grant (write-only; never returned). PATCH a new value to reconnect a source whose refresh token expired or was revoked. */
+    refresh_token?: string
+    /** Whether a client secret is stored (the secret itself is never returned). */
+    readonly has_client_secret: boolean
+    /** Whether a refresh token is stored (the secret itself is never returned). */
+    readonly has_refresh_token: boolean
+    /** Non-empty (TOKEN_REFRESH_FAILED) while the stored token is failing to refresh; cleared on a successful reconnect or sync. */
+    readonly errors: string
+    readonly created_at: string
+    /** @nullable */
+    readonly updated_at: string | null
+}
+
+export interface PaginatedCustomOAuth2IntegrationListApi {
+    count: number
+    /** @nullable */
+    next?: string | null
+    /** @nullable */
+    previous?: string | null
+    results: CustomOAuth2IntegrationApi[]
+}
+
+/**
+ * Read/write a custom REST source's customer-owned OAuth2 integration.
+ *
+ * The encrypted `sensitive_config` (client secret + tokens) is deliberately absent from `fields` —
+ * redaction by omission. Secrets are accepted as write-only inputs and never returned; the stored
+ * booleans below report presence only.
+ */
+export interface PatchedCustomOAuth2IntegrationApi {
+    readonly id?: string
+    /**
+     * The custom source this integration backs, if already created. The source points back via its `auth_oauth2_integration_id`; this is the reverse link for cleanup and the unique constraint.
+     * @nullable
+     */
+    external_data_source?: string | null
+    /** Non-secret OAuth2 client config. Required on create. */
+    config?: CustomOAuth2ConfigApi
+    /** OAuth2 client secret (write-only; never returned). Provide on create or to reconnect. */
+    client_secret?: string
+    /** Pre-obtained refresh token for the refresh_token grant (write-only; never returned). PATCH a new value to reconnect a source whose refresh token expired or was revoked. */
+    refresh_token?: string
+    /** Whether a client secret is stored (the secret itself is never returned). */
+    readonly has_client_secret?: boolean
+    /** Whether a refresh token is stored (the secret itself is never returned). */
+    readonly has_refresh_token?: boolean
+    /** Non-empty (TOKEN_REFRESH_FAILED) while the stored token is failing to refresh; cleared on a successful reconnect or sync. */
+    readonly errors?: string
+    readonly created_at?: string
+    /** @nullable */
+    readonly updated_at?: string | null
+}
+
+/**
  * * `Cancelled` - Cancelled
  * * `Completed` - Completed
  * * `Failed` - Failed
@@ -2396,6 +2548,17 @@ export interface ViewLinkValidationApi {
     source_table_name: string
     /** @maxLength 255 */
     source_table_key: string
+}
+
+export type CustomOauth2IntegrationsListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number
 }
 
 export type DataModelingJobsListParams = {

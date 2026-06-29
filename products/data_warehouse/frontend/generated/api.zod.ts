@@ -10,6 +10,276 @@
 import * as zod from 'zod'
 
 /**
+ * Manage the customer-owned OAuth2 integrations that back custom REST sources.
+ *
+ * Create one, then point a custom source at it via the source's `auth_oauth2_integration_id`. PATCH a
+ * new `refresh_token` (or `client_secret`) to reconnect a source whose token expired or was revoked —
+ * that clears the broken-token error without rebuilding the source. Secrets are write-only and never
+ * returned; reads expose the non-secret config plus presence booleans.
+ */
+export const customOauth2IntegrationsCreateBodyConfigOneGrantTypeDefault = `client_credentials`
+export const customOauth2IntegrationsCreateBodyConfigOneClientAuthMethodDefault = `body`
+
+export const CustomOauth2IntegrationsCreateBody = /* @__PURE__ */ zod
+    .object({
+        external_data_source: zod
+            .uuid()
+            .nullish()
+            .describe(
+                'The custom source this integration backs, if already created. The source points back via its `auth_oauth2_integration_id`; this is the reverse link for cleanup and the unique constraint.'
+            ),
+        config: zod
+            .object({
+                client_id: zod.string().describe('OAuth2 client ID of the customer-owned client.'),
+                token_url: zod
+                    .url()
+                    .describe(
+                        'Token endpoint the worker POSTs to mint access tokens. Receives the client secret, so it must be a trusted public host; internal\/loopback hosts are rejected.'
+                    ),
+                grant_type: zod
+                    .enum(['client_credentials', 'refresh_token'])
+                    .describe('\* `client_credentials` - client_credentials\n\* `refresh_token` - refresh_token')
+                    .default(customOauth2IntegrationsCreateBodyConfigOneGrantTypeDefault)
+                    .describe(
+                        'OAuth2 grant. client_credentials (machine-to-machine) or refresh_token (a pre-obtained refresh token the customer supplies). authorization_code is not supported.\n\n\* `client_credentials` - client_credentials\n\* `refresh_token` - refresh_token'
+                    ),
+                scopes: zod.string().nullish().describe('Space-separated OAuth2 scopes, if the provider needs them.'),
+                access_token_name: zod
+                    .string()
+                    .nullish()
+                    .describe("Response field holding the access token, when it isn't the standard 'access_token'."),
+                expires_in_name: zod
+                    .string()
+                    .nullish()
+                    .describe("Response field holding the token TTL, when it isn't the standard 'expires_in'."),
+                expiry_date_format: zod
+                    .string()
+                    .nullish()
+                    .describe(
+                        'strptime format to parse an absolute-datetime expiry, for providers that return one instead of a TTL in seconds.'
+                    ),
+                extra_token_request_params: zod
+                    .record(zod.string(), zod.string())
+                    .optional()
+                    .describe(
+                        "Extra form params added to the token request body (e.g. an 'audience' some providers require)."
+                    ),
+                token_request_headers: zod
+                    .record(zod.string(), zod.string())
+                    .optional()
+                    .describe('Extra headers sent on the token request, for providers that need them.'),
+                client_auth_method: zod
+                    .enum(['body', 'basic'])
+                    .describe('\* `body` - body\n\* `basic` - basic')
+                    .default(customOauth2IntegrationsCreateBodyConfigOneClientAuthMethodDefault)
+                    .describe(
+                        "How the client credentials are sent: 'body' (form params) or 'basic' (HTTP Basic).\n\n\* `body` - body\n\* `basic` - basic"
+                    ),
+                refreshed_at: zod
+                    .number()
+                    .describe('Unix seconds of the last successful token mint, set by the sync worker.'),
+            })
+            .describe(
+                "The non-secret OAuth2 client config — the exact knobs the worker's OAuth2 auth engine accepts.\n\nOnly the fields declared here round-trip; unknown keys are dropped on write (so the API can't pollute\nthe stored config) and hidden on read. Secrets (client_secret, refresh_token) are never part of this."
+            )
+            .optional()
+            .describe('Non-secret OAuth2 client config. Required on create.'),
+        client_secret: zod
+            .string()
+            .optional()
+            .describe('OAuth2 client secret (write-only; never returned). Provide on create or to reconnect.'),
+        refresh_token: zod
+            .string()
+            .optional()
+            .describe(
+                'Pre-obtained refresh token for the refresh_token grant (write-only; never returned). PATCH a new value to reconnect a source whose refresh token expired or was revoked.'
+            ),
+    })
+    .describe(
+        "Read\/write a custom REST source's customer-owned OAuth2 integration.\n\nThe encrypted `sensitive_config` (client secret + tokens) is deliberately absent from `fields` —\nredaction by omission. Secrets are accepted as write-only inputs and never returned; the stored\nbooleans below report presence only."
+    )
+
+/**
+ * Manage the customer-owned OAuth2 integrations that back custom REST sources.
+ *
+ * Create one, then point a custom source at it via the source's `auth_oauth2_integration_id`. PATCH a
+ * new `refresh_token` (or `client_secret`) to reconnect a source whose token expired or was revoked —
+ * that clears the broken-token error without rebuilding the source. Secrets are write-only and never
+ * returned; reads expose the non-secret config plus presence booleans.
+ */
+export const customOauth2IntegrationsUpdateBodyConfigOneGrantTypeDefault = `client_credentials`
+export const customOauth2IntegrationsUpdateBodyConfigOneClientAuthMethodDefault = `body`
+
+export const CustomOauth2IntegrationsUpdateBody = /* @__PURE__ */ zod
+    .object({
+        external_data_source: zod
+            .uuid()
+            .nullish()
+            .describe(
+                'The custom source this integration backs, if already created. The source points back via its `auth_oauth2_integration_id`; this is the reverse link for cleanup and the unique constraint.'
+            ),
+        config: zod
+            .object({
+                client_id: zod.string().describe('OAuth2 client ID of the customer-owned client.'),
+                token_url: zod
+                    .url()
+                    .describe(
+                        'Token endpoint the worker POSTs to mint access tokens. Receives the client secret, so it must be a trusted public host; internal\/loopback hosts are rejected.'
+                    ),
+                grant_type: zod
+                    .enum(['client_credentials', 'refresh_token'])
+                    .describe('\* `client_credentials` - client_credentials\n\* `refresh_token` - refresh_token')
+                    .default(customOauth2IntegrationsUpdateBodyConfigOneGrantTypeDefault)
+                    .describe(
+                        'OAuth2 grant. client_credentials (machine-to-machine) or refresh_token (a pre-obtained refresh token the customer supplies). authorization_code is not supported.\n\n\* `client_credentials` - client_credentials\n\* `refresh_token` - refresh_token'
+                    ),
+                scopes: zod.string().nullish().describe('Space-separated OAuth2 scopes, if the provider needs them.'),
+                access_token_name: zod
+                    .string()
+                    .nullish()
+                    .describe("Response field holding the access token, when it isn't the standard 'access_token'."),
+                expires_in_name: zod
+                    .string()
+                    .nullish()
+                    .describe("Response field holding the token TTL, when it isn't the standard 'expires_in'."),
+                expiry_date_format: zod
+                    .string()
+                    .nullish()
+                    .describe(
+                        'strptime format to parse an absolute-datetime expiry, for providers that return one instead of a TTL in seconds.'
+                    ),
+                extra_token_request_params: zod
+                    .record(zod.string(), zod.string())
+                    .optional()
+                    .describe(
+                        "Extra form params added to the token request body (e.g. an 'audience' some providers require)."
+                    ),
+                token_request_headers: zod
+                    .record(zod.string(), zod.string())
+                    .optional()
+                    .describe('Extra headers sent on the token request, for providers that need them.'),
+                client_auth_method: zod
+                    .enum(['body', 'basic'])
+                    .describe('\* `body` - body\n\* `basic` - basic')
+                    .default(customOauth2IntegrationsUpdateBodyConfigOneClientAuthMethodDefault)
+                    .describe(
+                        "How the client credentials are sent: 'body' (form params) or 'basic' (HTTP Basic).\n\n\* `body` - body\n\* `basic` - basic"
+                    ),
+                refreshed_at: zod
+                    .number()
+                    .describe('Unix seconds of the last successful token mint, set by the sync worker.'),
+            })
+            .describe(
+                "The non-secret OAuth2 client config — the exact knobs the worker's OAuth2 auth engine accepts.\n\nOnly the fields declared here round-trip; unknown keys are dropped on write (so the API can't pollute\nthe stored config) and hidden on read. Secrets (client_secret, refresh_token) are never part of this."
+            )
+            .optional()
+            .describe('Non-secret OAuth2 client config. Required on create.'),
+        client_secret: zod
+            .string()
+            .optional()
+            .describe('OAuth2 client secret (write-only; never returned). Provide on create or to reconnect.'),
+        refresh_token: zod
+            .string()
+            .optional()
+            .describe(
+                'Pre-obtained refresh token for the refresh_token grant (write-only; never returned). PATCH a new value to reconnect a source whose refresh token expired or was revoked.'
+            ),
+    })
+    .describe(
+        "Read\/write a custom REST source's customer-owned OAuth2 integration.\n\nThe encrypted `sensitive_config` (client secret + tokens) is deliberately absent from `fields` —\nredaction by omission. Secrets are accepted as write-only inputs and never returned; the stored\nbooleans below report presence only."
+    )
+
+/**
+ * Manage the customer-owned OAuth2 integrations that back custom REST sources.
+ *
+ * Create one, then point a custom source at it via the source's `auth_oauth2_integration_id`. PATCH a
+ * new `refresh_token` (or `client_secret`) to reconnect a source whose token expired or was revoked —
+ * that clears the broken-token error without rebuilding the source. Secrets are write-only and never
+ * returned; reads expose the non-secret config plus presence booleans.
+ */
+export const customOauth2IntegrationsPartialUpdateBodyConfigOneGrantTypeDefault = `client_credentials`
+export const customOauth2IntegrationsPartialUpdateBodyConfigOneClientAuthMethodDefault = `body`
+
+export const CustomOauth2IntegrationsPartialUpdateBody = /* @__PURE__ */ zod
+    .object({
+        external_data_source: zod
+            .uuid()
+            .nullish()
+            .describe(
+                'The custom source this integration backs, if already created. The source points back via its `auth_oauth2_integration_id`; this is the reverse link for cleanup and the unique constraint.'
+            ),
+        config: zod
+            .object({
+                client_id: zod.string().describe('OAuth2 client ID of the customer-owned client.'),
+                token_url: zod
+                    .url()
+                    .describe(
+                        'Token endpoint the worker POSTs to mint access tokens. Receives the client secret, so it must be a trusted public host; internal\/loopback hosts are rejected.'
+                    ),
+                grant_type: zod
+                    .enum(['client_credentials', 'refresh_token'])
+                    .describe('\* `client_credentials` - client_credentials\n\* `refresh_token` - refresh_token')
+                    .default(customOauth2IntegrationsPartialUpdateBodyConfigOneGrantTypeDefault)
+                    .describe(
+                        'OAuth2 grant. client_credentials (machine-to-machine) or refresh_token (a pre-obtained refresh token the customer supplies). authorization_code is not supported.\n\n\* `client_credentials` - client_credentials\n\* `refresh_token` - refresh_token'
+                    ),
+                scopes: zod.string().nullish().describe('Space-separated OAuth2 scopes, if the provider needs them.'),
+                access_token_name: zod
+                    .string()
+                    .nullish()
+                    .describe("Response field holding the access token, when it isn't the standard 'access_token'."),
+                expires_in_name: zod
+                    .string()
+                    .nullish()
+                    .describe("Response field holding the token TTL, when it isn't the standard 'expires_in'."),
+                expiry_date_format: zod
+                    .string()
+                    .nullish()
+                    .describe(
+                        'strptime format to parse an absolute-datetime expiry, for providers that return one instead of a TTL in seconds.'
+                    ),
+                extra_token_request_params: zod
+                    .record(zod.string(), zod.string())
+                    .optional()
+                    .describe(
+                        "Extra form params added to the token request body (e.g. an 'audience' some providers require)."
+                    ),
+                token_request_headers: zod
+                    .record(zod.string(), zod.string())
+                    .optional()
+                    .describe('Extra headers sent on the token request, for providers that need them.'),
+                client_auth_method: zod
+                    .enum(['body', 'basic'])
+                    .describe('\* `body` - body\n\* `basic` - basic')
+                    .default(customOauth2IntegrationsPartialUpdateBodyConfigOneClientAuthMethodDefault)
+                    .describe(
+                        "How the client credentials are sent: 'body' (form params) or 'basic' (HTTP Basic).\n\n\* `body` - body\n\* `basic` - basic"
+                    ),
+                refreshed_at: zod
+                    .number()
+                    .describe('Unix seconds of the last successful token mint, set by the sync worker.'),
+            })
+            .describe(
+                "The non-secret OAuth2 client config — the exact knobs the worker's OAuth2 auth engine accepts.\n\nOnly the fields declared here round-trip; unknown keys are dropped on write (so the API can't pollute\nthe stored config) and hidden on read. Secrets (client_secret, refresh_token) are never part of this."
+            )
+            .optional()
+            .describe('Non-secret OAuth2 client config. Required on create.'),
+        client_secret: zod
+            .string()
+            .optional()
+            .describe('OAuth2 client secret (write-only; never returned). Provide on create or to reconnect.'),
+        refresh_token: zod
+            .string()
+            .optional()
+            .describe(
+                'Pre-obtained refresh token for the refresh_token grant (write-only; never returned). PATCH a new value to reconnect a source whose refresh token expired or was revoked.'
+            ),
+    })
+    .describe(
+        "Read\/write a custom REST source's customer-owned OAuth2 integration.\n\nThe encrypted `sensitive_config` (client secret + tokens) is deliberately absent from `fields` —\nredaction by omission. Secrets are accepted as write-only inputs and never returned; the stored\nbooleans below report presence only."
+    )
+
+/**
  * Enable warehouse backfill for this environment with a dedicated set of tables.
  *
  * Requires a table name and records the environment's membership in the
