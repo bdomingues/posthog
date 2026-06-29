@@ -155,7 +155,10 @@ function ImpersonationNoticeContent(): JSX.Element {
                   key: member.user.uuid,
                   label: (
                       <span className="flex items-center gap-2 justify-between w-full">
-                          <span>{fullName(member.user)}</span>
+                          <span className="flex flex-col">
+                              <span>{fullName(member.user)}</span>
+                              <span className="text-xs text-muted">{member.user.email}</span>
+                          </span>
                           <LemonTag>
                               {capitalizeFirstLetter(
                                   membershipLevelToName.get(member.level) ?? `unknown (${member.level})`
