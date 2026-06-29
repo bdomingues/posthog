@@ -7,6 +7,7 @@ import { PhonePairHogs } from 'lib/components/hedgehogs'
 
 import { CommentWithReplies } from './Comment'
 import { CommentsLogicProps, commentsLogic } from './commentsLogic'
+import { SendCommentToSlackModal } from './SendCommentToSlackModal'
 
 export interface CommentsListProps extends CommentsLogicProps {
     noun?: string
@@ -46,6 +47,7 @@ export const CommentsList = ({ noun = 'page', ...props }: CommentsListProps): JS
                         <CommentWithReplies key={x.id} commentWithReplies={x} />
                     ))}
                 </div>
+                <SendCommentToSlackModal />
             </div>
         </BindLogic>
     )
