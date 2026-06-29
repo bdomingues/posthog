@@ -1,1 +1,1 @@
-1245_duckgres_sink_schema_state
+1246_delete_materialized_column_slot
