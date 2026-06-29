@@ -1493,6 +1493,7 @@ class TestUpgradeImpersonation(APIBaseTest):
         assert log.was_impersonated is True
         assert log.user_id == self.user.id
         assert str(log.item_id) == str(self.other_user.id)
+        assert log.detail is not None
         assert log.detail["context"]["reason"] == "Upgrade reason for ticket #5678"
         assert log.detail["context"]["mode"] == "read_write"
 
@@ -1631,6 +1632,7 @@ class TestDowngradeImpersonation(APIBaseTest):
         assert log.was_impersonated is True
         assert log.user_id == self.user.id
         assert str(log.item_id) == str(self.other_user.id)
+        assert log.detail is not None
         assert log.detail["context"]["reason"] == "Done with changes, back to read-only"
         assert log.detail["context"]["mode"] == "read_only"
 
