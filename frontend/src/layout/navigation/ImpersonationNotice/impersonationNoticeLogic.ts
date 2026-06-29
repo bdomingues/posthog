@@ -1,4 +1,4 @@
-import { actions, afterMount, connect, kea, listeners, path, reducers, selectors } from 'kea'
+import { actions, connect, kea, listeners, path, reducers, selectors } from 'kea'
 import { urlToAction } from 'kea-router'
 
 import { lemonToast } from '@posthog/lemon-ui'
@@ -12,12 +12,7 @@ import { userLogic } from 'scenes/userLogic'
 
 import { OrganizationMemberType, Region, UserType } from '~/types'
 
-import {
-    adminLoginAs,
-    clearAllStoredImpersonationReasons,
-    getStoredImpersonationReason,
-    setStoredImpersonationReason,
-} from './adminLoginAs'
+import { adminLoginAs } from './adminLoginAs'
 import type { impersonationNoticeLogicType } from './impersonationNoticeLogicType'
 
 export interface ExpiredSessionInfo {
@@ -50,15 +45,6 @@ function adminLoginUrlForRegion(region: Region, email: string): string {
     return `https://${domain}/admin/posthog/user/?q=${encodeURIComponent(email)}`
 }
 
-function seedStoredReasonFromUser(user: UserType | null): void {
-    // Bridge the server-side reason (set on both Django-admin and in-app starts) into the
-    // localStorage cache, so the reason is available for autofill regardless of how the
-    // impersonation session began.
-    if (user?.is_impersonated && user.is_impersonated_reason && user.id != null) {
-        setStoredImpersonationReason(user.id, user.is_impersonated_reason)
-    }
-}
-
 export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
     path(['layout', 'navigation', 'ImpersonationNotice', 'impersonationNoticeLogic']),
 
@@ -78,7 +64,6 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
                 'downgradeImpersonationSuccess',
                 'loadUser',
                 'loadUserSuccess',
-                'logout',
             ],
             membersLogic,
             ['ensureAllMembersLoaded'],
@@ -210,13 +195,9 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
     }),
 
     listeners(({ actions, values }) => ({
-        logout: () => {
-            clearAllStoredImpersonationReasons()
-        },
         returnToPostHog: () => {
             // Restore the original staff login (via the loginas logout endpoint) and
             // land back in the PostHog app rather than the Django admin.
-            clearAllStoredImpersonationReasons()
             window.location.href = `/admin/logout/?next=${encodeURIComponent('/')}`
         },
         upgradeImpersonationSuccess: () => {
@@ -245,9 +226,10 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
             }
         },
         changeUser: async ({ userId, reason }) => {
-            const resolvedReason = reason?.trim() || getStoredImpersonationReason(values.user?.id)?.trim()
+            // The reason normally arrives from the confirm modal; fall back to the persisted reason
+            // so we never POST an empty one (the backend requires a non-empty reason).
+            const resolvedReason = reason?.trim() || values.user?.is_impersonated_reason?.trim()
             if (!resolvedReason) {
-                // The component prompts for a reason before dispatching when none is cached.
                 actions.changeUserFailure('A reason is required to change user')
                 return
             }
@@ -263,8 +245,6 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
             }
         },
         loadUserSuccess: ({ user }) => {
-            seedStoredReasonFromUser(user)
-
             const { expiredSessionInfo } = values
             if (!expiredSessionInfo) {
                 return
@@ -324,9 +304,4 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
             }
         },
     })),
-
-    afterMount(({ values }) => {
-        // Seed from a user already loaded before this logic mounted (loadUserSuccess covers later loads).
-        seedStoredReasonFromUser(values.user)
-    }),
 ])

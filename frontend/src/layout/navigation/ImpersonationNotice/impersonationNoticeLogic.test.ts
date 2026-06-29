@@ -17,11 +17,6 @@ import { useMocks } from '~/mocks/jest'
 import { initKeaTests } from '~/test/init'
 import { OrganizationMemberType, Region, UserType } from '~/types'
 
-import {
-    clearAllStoredImpersonationReasons,
-    getStoredImpersonationReason,
-    setStoredImpersonationReason,
-} from './adminLoginAs'
 import { impersonationNoticeLogic } from './impersonationNoticeLogic'
 
 jest.mock('@posthog/lemon-ui', () => {
@@ -72,7 +67,6 @@ describe('impersonationNoticeLogic', () => {
     let logic: ReturnType<typeof impersonationNoticeLogic.build>
 
     beforeEach(() => {
-        localStorage.clear()
         useMocks({
             get: {
                 '/api/users/@me/': () => [200, MOCK_DEFAULT_USER],
@@ -88,10 +82,6 @@ describe('impersonationNoticeLogic', () => {
         membersLogic.mount()
         logic = impersonationNoticeLogic()
         logic.mount()
-    })
-
-    afterEach(() => {
-        localStorage.clear()
     })
 
     describe('reducers', () => {
@@ -358,54 +348,6 @@ describe('impersonationNoticeLogic', () => {
                     writable: true,
                     value: originalLocation,
                 })
-            }
-        })
-
-        it('clears every cached impersonation reason', async () => {
-            setStoredImpersonationReason(179, 'support ticket #123')
-            setStoredImpersonationReason(456, 'support ticket #456')
-
-            const originalLocation = window.location
-            Object.defineProperty(window, 'location', {
-                configurable: true,
-                writable: true,
-                value: { ...originalLocation, href: originalLocation.href },
-            })
-
-            try {
-                await expectLogic(logic, () => {
-                    logic.actions.returnToPostHog()
-                }).toFinishAllListeners()
-
-                expect(getStoredImpersonationReason(179)).toBeNull()
-                expect(getStoredImpersonationReason(456)).toBeNull()
-            } finally {
-                Object.defineProperty(window, 'location', {
-                    configurable: true,
-                    writable: true,
-                    value: originalLocation,
-                })
-            }
-        })
-    })
-
-    describe('logout listener', () => {
-        it('clears every cached impersonation reason on logout', async () => {
-            setStoredImpersonationReason(179, 'reason a')
-            setStoredImpersonationReason(456, 'reason b')
-
-            // userLogic.logout submits a hidden form, which jsdom does not implement.
-            const submitSpy = jest.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => {})
-
-            try {
-                await expectLogic(logic, () => {
-                    userLogic.actions.logout()
-                }).toFinishAllListeners()
-
-                expect(getStoredImpersonationReason(179)).toBeNull()
-                expect(getStoredImpersonationReason(456)).toBeNull()
-            } finally {
-                submitSpy.mockRestore()
             }
         })
     })
@@ -702,42 +644,6 @@ describe('impersonationNoticeLogic', () => {
         })
     })
 
-    describe('stored impersonation reason', () => {
-        it('round-trips through localStorage keyed by user id', () => {
-            expect(getStoredImpersonationReason(179)).toBeNull()
-
-            setStoredImpersonationReason(179, 'support ticket #999')
-            expect(getStoredImpersonationReason(179)).toBe('support ticket #999')
-
-            clearAllStoredImpersonationReasons()
-            expect(getStoredImpersonationReason(179)).toBeNull()
-        })
-
-        it('does not return a reason stored for a different user', () => {
-            setStoredImpersonationReason(179, 'reason for 179')
-
-            expect(getStoredImpersonationReason(456)).toBeNull()
-            expect(getStoredImpersonationReason(179)).toBe('reason for 179')
-        })
-
-        it('returns null when no user id is provided', () => {
-            setStoredImpersonationReason(179, 'reason for 179')
-
-            expect(getStoredImpersonationReason(null)).toBeNull()
-            expect(getStoredImpersonationReason(undefined)).toBeNull()
-        })
-
-        it('clears reasons for every user', () => {
-            setStoredImpersonationReason(179, 'reason for 179')
-            setStoredImpersonationReason(456, 'reason for 456')
-
-            clearAllStoredImpersonationReasons()
-
-            expect(getStoredImpersonationReason(179)).toBeNull()
-            expect(getStoredImpersonationReason(456)).toBeNull()
-        })
-    })
-
     describe('changeableMembers selector', () => {
         it('groups by power descending then names A→Z, excluding the impersonated user', async () => {
             userLogic.actions.loadUserSuccess(MOCK_IMPERSONATED_USER)
@@ -788,13 +694,13 @@ describe('impersonationNoticeLogic', () => {
             { readOnly: true, expected: 'true' },
             { readOnly: false, expected: 'false' },
         ])(
-            'reuses the cached reason and sends read_only=$expected matching the current mode',
+            'reuses the persisted reason and sends read_only=$expected matching the current mode',
             async ({ readOnly, expected }) => {
                 userLogic.actions.loadUserSuccess({
                     ...MOCK_IMPERSONATED_USER,
                     is_impersonated_read_only: readOnly,
+                    is_impersonated_reason: 'support ticket #123',
                 })
-                setStoredImpersonationReason(MOCK_IMPERSONATED_USER.id, 'support ticket #123')
 
                 const fetchSpy = jest.spyOn(globalThis, 'fetch')
                 const { reload, restore } = mockLocationReload()
@@ -829,9 +735,8 @@ describe('impersonationNoticeLogic', () => {
             }
         )
 
-        it('uses an explicitly passed reason over the cached one', async () => {
-            userLogic.actions.loadUserSuccess(MOCK_IMPERSONATED_USER)
-            setStoredImpersonationReason(MOCK_IMPERSONATED_USER.id, 'cached reason')
+        it('uses an explicitly passed reason over the persisted one', async () => {
+            userLogic.actions.loadUserSuccess({ ...MOCK_IMPERSONATED_USER, is_impersonated_reason: 'persisted reason' })
 
             const fetchSpy = jest.spyOn(globalThis, 'fetch')
             const { restore } = mockLocationReload()
@@ -871,8 +776,10 @@ describe('impersonationNoticeLogic', () => {
         })
 
         it('shows an error toast and resets state on failure', async () => {
-            userLogic.actions.loadUserSuccess(MOCK_IMPERSONATED_USER)
-            setStoredImpersonationReason(MOCK_IMPERSONATED_USER.id, 'support ticket #123')
+            userLogic.actions.loadUserSuccess({
+                ...MOCK_IMPERSONATED_USER,
+                is_impersonated_reason: 'support ticket #123',
+            })
 
             const { reload, restore } = mockLocationReload()
 
@@ -924,33 +831,6 @@ describe('impersonationNoticeLogic', () => {
             })
                 .toFinishAllListeners()
                 .toMatchValues({ isDowngradeModalOpen: false })
-        })
-    })
-
-    describe('reason seeding from the user API', () => {
-        it('seeds the cached reason from is_impersonated_reason on loadUserSuccess', async () => {
-            expect(getStoredImpersonationReason(MOCK_IMPERSONATED_USER.id)).toBeNull()
-
-            await expectLogic(logic, () => {
-                userLogic.actions.loadUserSuccess({
-                    ...MOCK_IMPERSONATED_USER,
-                    is_impersonated_reason: 'reason from the django admin',
-                })
-            }).toFinishAllListeners()
-
-            expect(getStoredImpersonationReason(MOCK_IMPERSONATED_USER.id)).toBe('reason from the django admin')
-        })
-
-        it('does not seed when the user is not impersonated', async () => {
-            await expectLogic(logic, () => {
-                userLogic.actions.loadUserSuccess({
-                    ...MOCK_DEFAULT_USER,
-                    is_impersonated: false,
-                    is_impersonated_reason: 'should not be seeded',
-                })
-            }).toFinishAllListeners()
-
-            expect(getStoredImpersonationReason(MOCK_DEFAULT_USER.id)).toBeNull()
         })
     })
 })

@@ -15,7 +15,6 @@ import { membershipLevelToName } from 'lib/utils/permissioning'
 import { capitalizeFirstLetter, fullName } from 'lib/utils/strings'
 import { userLogic } from 'scenes/userLogic'
 
-import { clearAllStoredImpersonationReasons, getStoredImpersonationReason } from './adminLoginAs'
 import { AdminLoginButtons } from './AdminLoginButtons'
 import {
     AdminLoginUrl,
@@ -99,7 +98,6 @@ function ImpersonationExpiredOverlay({ expiredSessionInfo }: { expiredSessionInf
                 label: 'Return to admin',
                 status: 'danger',
                 onClick: () => {
-                    clearAllStoredImpersonationReasons()
                     window.location.href = '/admin/'
                 },
                 sideAction: {
@@ -143,12 +141,12 @@ function ImpersonationNoticeContent(): JSX.Element {
         ensureAllMembersLoaded,
     } = useActions(impersonationNoticeLogic)
 
-    // Set when an operator picks a user but no cached reason exists — drives the fallback modal.
+    // The user the operator picked to switch to; drives the confirm-reason modal.
     const [pendingUserId, setPendingUserId] = useState<number | null>(null)
 
-    // The reason given when impersonation of the current user started, reused for switching
-    // and for pre-filling the read-write upgrade modal.
-    const storedReason = getStoredImpersonationReason(user?.id)
+    // The reason given when impersonation of the current user started (persisted server-side),
+    // used to pre-fill the change-user and upgrade/downgrade modals.
+    const storedReason = user?.is_impersonated_reason
 
     const changeUserItems =
         changeableMembers.length === 0

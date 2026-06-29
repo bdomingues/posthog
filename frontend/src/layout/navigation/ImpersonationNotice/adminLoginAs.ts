@@ -1,44 +1,5 @@
 import { getCookie } from 'lib/api'
 
-// The impersonation reason is required by the backend but never persisted server-side
-// (it's only emitted to analytics). We cache it here so "Change user" and the read-write
-// upgrade can reuse the original reason without re-prompting the operator. Each reason is
-// keyed under a per-user-id localStorage key so a stale entry can never be applied to the
-// wrong person, and every key is swept on logout.
-const IMPERSONATION_REASON_KEY_PREFIX = 'ph_impersonation_reason_'
-
-export function setStoredImpersonationReason(userId: number, reason: string): void {
-    try {
-        localStorage.setItem(IMPERSONATION_REASON_KEY_PREFIX + userId, reason)
-    } catch {
-        // localStorage can throw (e.g. Safari private mode) — caching is best-effort.
-    }
-}
-
-export function getStoredImpersonationReason(userId: number | null | undefined): string | null {
-    if (userId == null) {
-        return null
-    }
-    try {
-        return localStorage.getItem(IMPERSONATION_REASON_KEY_PREFIX + userId)
-    } catch {
-        return null
-    }
-}
-
-export function clearAllStoredImpersonationReasons(): void {
-    try {
-        // Remove every cached reason (one per impersonated user) so nothing lingers after logout.
-        for (const key of Object.keys(localStorage)) {
-            if (key.startsWith(IMPERSONATION_REASON_KEY_PREFIX)) {
-                localStorage.removeItem(key)
-            }
-        }
-    } catch {
-        // Best-effort — see setStoredImpersonationReason.
-    }
-}
-
 async function ensureAdminOAuth2(): Promise<void> {
     const authCheckResponse = await fetch('/admin/auth_check', {
         method: 'GET',
@@ -116,6 +77,4 @@ export async function adminLoginAs({ userId, reason, readOnly }: AdminLoginAsPar
     if (!loginResponse.ok) {
         throw new Error(`django-loginas request resulted in status ${loginResponse.status}`)
     }
-
-    setStoredImpersonationReason(userId, reason)
 }
