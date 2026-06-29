@@ -8,7 +8,11 @@ export function AdminLoginButtons(): JSX.Element {
     const { ticketContext, isInitiatingImpersonation } = useValues(impersonationNoticeLogic)
     const { initiateImpersonation } = useActions(impersonationNoticeLogic)
 
-    const disabledReason = !ticketContext?.email ? 'This ticket has no associated email' : undefined
+    const disabledReason = !ticketContext?.email
+        ? 'This ticket has no associated email'
+        : ticketContext.identityVerified === false
+          ? "This customer's identity could not be verified, so login as is disabled"
+          : undefined
 
     // Resolving the customer's region and user happens server-side, so a single
     // button suffices — staff are routed to the right region automatically.

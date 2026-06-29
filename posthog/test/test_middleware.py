@@ -2384,6 +2384,28 @@ class TestLoginAsFromTicket(APIBaseTest):
 
     @parameterized.expand(
         [
+            # Only an explicit False blocks; None (never assessed) and True allow login.
+            ("verified", True, 200, "customer@posthog.com"),
+            ("unassessed", None, 200, "customer@posthog.com"),
+            ("unverified", False, 400, None),
+        ]
+    )
+    def test_identity_verified_gates_login(self, _name, identity_verified, expected_status, expected_email):
+        ticket = self._create_ticket({"email": "customer@posthog.com"})
+        ticket.identity_verified = identity_verified
+        ticket.save(update_fields=["identity_verified"])
+        with self._as_internal_team():
+            res = self._post({"ticket_id": str(ticket.id)})
+        assert res.status_code == expected_status
+        impersonated_email = self.client.get("/api/users/@me").json()["email"]
+        if expected_email is None:
+            # Blocked — staff must not have been logged in as the customer.
+            assert impersonated_email == self.user.email
+        else:
+            assert impersonated_email == expected_email
+
+    @parameterized.expand(
+        [
             ("missing", {}),
             ("blank", {"ticket_id": "   "}),
             ("invalid_uuid", {"ticket_id": "not-a-uuid"}),

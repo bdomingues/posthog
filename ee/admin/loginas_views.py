@@ -161,6 +161,17 @@ def loginas_user_from_ticket(request):
             status=404,
         )
 
+    # Block when the claimed identity was assessed but not attested (False). A null
+    # value means the signal was never assessed (e.g. pre-dates it), which the UI
+    # surfaces as a caution rather than a hard block, so only reject an explicit False.
+    if ticket.identity_verified is False:
+        return JsonResponse(
+            {
+                "error": "This ticket's identity could not be verified, so logging in as the customer is disabled. Verify the customer's identity and login from admin manually."
+            },
+            status=400,
+        )
+
     # When the ticket originated in another region, point staff at that region's
     # admin rather than trying (and failing) to resolve the user locally.
     ticket_region = ((ticket.anonymous_traits or {}).get("region") or "").upper()

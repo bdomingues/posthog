@@ -27,6 +27,9 @@ export interface ImpersonationTicketContext {
     ticketNumber?: number
     email: string
     region?: Region
+    // Trust signal from the ticket: true = verified, false = assessed but unverified
+    // (login-as disabled), null/undefined = never assessed (login-as allowed with a caution).
+    identityVerified?: boolean | null
 }
 
 // Persisted across the post-impersonation page reload so the notice can offer a
