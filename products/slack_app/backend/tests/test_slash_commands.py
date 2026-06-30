@@ -1,8 +1,8 @@
 """Tests for the slash command webhook view.
 
 The parser and dispatcher are covered by their own tests — this file exercises
-the new entry point's responsibilities: request validation, region routing,
-user resolution, and the bridge into ``dispatch_rules_command``.
+the new entry point's responsibilities: request validation, retry handling,
+region routing, user resolution, and the bridge into ``dispatch_rules_command``.
 """
 
 from typing import Any
@@ -60,6 +60,14 @@ class _SlashCommandTestBase(TestCase):
             refreshed_at=timezone.now(),
         )
 
+        # Every test in this file relies on the same signing-secret / SlackIntegration mocks;
+        # lifting them into setUp via ``enterContext`` removes per-test decorator stacks and
+        # keeps the test bodies focused on the slash-command behavior under exercise.
+        self._mock_config = self.enterContext(
+            patch("products.slack_app.backend.views.slack_command.SlackIntegration.slack_config")
+        )
+        self._mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
+
     def _post_slash_command(self, payload: dict[str, str], **extra_headers: str) -> Any:
         body = urlencode(payload).encode()
         signature, ts = sign_slack_request(body, SIGNING_SECRET)
@@ -91,106 +99,104 @@ class TestSlashCommandWebhookValidation(_SlashCommandTestBase):
         response = self.client.get(SLASH_COMMAND_PATH)
         assert response.status_code == 405
 
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration.slack_config")
-    def test_rejects_bad_signature(self, mock_config: Any) -> None:
-        mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": "different-secret"}
+    def test_rejects_bad_signature(self) -> None:
+        self._mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": "different-secret"}
         response = self._post_slash_command(self._default_payload(text="help"))
         assert response.status_code == 403
 
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration.slack_config")
-    def test_missing_required_payload_fields(self, mock_config: Any) -> None:
-        mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
+    def test_missing_required_payload_fields(self) -> None:
         response = self._post_slash_command(self._default_payload(team_id="", user_id=""))
         assert response.status_code == 200
         body = response.json()
         assert body["response_type"] == "ephemeral"
         assert "Missing Slack payload" in body["text"]
 
+    @patch("products.slack_app.backend.views.slack_command.dispatch_rules_command")
+    def test_retry_header_short_circuits_without_dispatch(self, mock_dispatch: Any) -> None:
+        """Slack retries when our 200 doesn't arrive within 3s — re-running dispatch
+        would produce duplicate ``rules add`` rows."""
+        response = self._post_slash_command(
+            self._default_payload(text="rules list"),
+            HTTP_X_SLACK_RETRY_NUM="1",
+        )
+        assert response.status_code == 200
+        assert response.content == b""
+        mock_dispatch.assert_not_called()
+
 
 class TestSlashCommandDispatch(_SlashCommandTestBase):
-    @patch("products.slack_app.backend.views.slack_command.dispatch_rules_command")
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration")
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration.slack_config")
-    def test_help_invokes_dispatch_with_help_action(
-        self, mock_config: Any, mock_slack_cls: Any, mock_dispatch: Any
-    ) -> None:
-        mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
-        mock_slack_cls.return_value.missing_scopes.return_value = frozenset()
+    def setUp(self) -> None:
+        super().setUp()
+        # Replacing ``SlackIntegration`` wholesale shadows the per-attribute ``slack_config``
+        # patch on the base class — re-stub ``slack_config`` on the class mock so signature
+        # validation still finds the test signing secret.
+        mock_slack_cls = self.enterContext(patch("products.slack_app.backend.views.slack_command.SlackIntegration"))
         mock_slack_cls.slack_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
+        mock_slack_cls.return_value.missing_scopes.return_value = frozenset()
+        self.mock_dispatch = self.enterContext(
+            patch("products.slack_app.backend.views.slack_command.dispatch_rules_command")
+        )
 
+    def test_help_invokes_dispatch_with_help_action(self) -> None:
         response = self._post_slash_command(self._default_payload(text="help"))
 
         assert response.status_code == 200
         assert response.content == b""
-        mock_dispatch.assert_called_once()
-        call_kwargs = mock_dispatch.call_args
-        parsed = call_kwargs.args[0]
+        self.mock_dispatch.assert_called_once()
+        call = self.mock_dispatch.call_args
+        parsed = call.args[0]
         assert parsed.action == "help"
-        assert call_kwargs.kwargs["slack_user_id"] == "U123"
-        assert call_kwargs.kwargs["slack_workspace_id"] == "T12345"
+        assert call.kwargs["slack_user_id"] == "U123"
+        assert call.kwargs["slack_workspace_id"] == "T12345"
+        # ``command_prefix`` is what surfaces in user-facing help/error copy — must
+        # match the entry point so the strings tell users to type ``/posthog ...``.
+        assert call.kwargs["command_prefix"] == "/posthog"
 
-    @patch("products.slack_app.backend.views.slack_command.dispatch_rules_command")
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration")
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration.slack_config")
-    def test_empty_text_falls_back_to_help(self, mock_config: Any, mock_slack_cls: Any, mock_dispatch: Any) -> None:
-        mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
-        mock_slack_cls.return_value.missing_scopes.return_value = frozenset()
-        mock_slack_cls.slack_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
-
+    def test_empty_text_falls_back_to_help(self) -> None:
         response = self._post_slash_command(self._default_payload(text=""))
 
         assert response.status_code == 200
-        mock_dispatch.assert_called_once()
-        assert mock_dispatch.call_args.args[0].action == "help"
+        self.mock_dispatch.assert_called_once()
+        assert self.mock_dispatch.call_args.args[0].action == "help"
 
-    @patch("products.slack_app.backend.views.slack_command.dispatch_rules_command")
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration.slack_config")
-    def test_unknown_sub_command_returns_help_text(self, mock_config: Any, mock_dispatch: Any) -> None:
-        mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
-
+    def test_unknown_sub_command_returns_help_text(self) -> None:
         response = self._post_slash_command(self._default_payload(text="frobnicate the widgets"))
 
         assert response.status_code == 200
         body = response.json()
         assert body["response_type"] == "ephemeral"
         assert "didn't recognize" in body["text"]
-        mock_dispatch.assert_not_called()
+        self.mock_dispatch.assert_not_called()
 
-    @patch("products.slack_app.backend.views.slack_command.dispatch_rules_command")
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration")
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration.slack_config")
-    def test_rules_list_dispatches_list_action(self, mock_config: Any, mock_slack_cls: Any, mock_dispatch: Any) -> None:
-        mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
-        mock_slack_cls.return_value.missing_scopes.return_value = frozenset()
-        mock_slack_cls.slack_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
-
+    def test_rules_list_dispatches_list_action(self) -> None:
         response = self._post_slash_command(self._default_payload(text="rules list"))
 
         assert response.status_code == 200
-        mock_dispatch.assert_called_once()
-        assert mock_dispatch.call_args.args[0].action == "list"
+        self.mock_dispatch.assert_called_once()
+        assert self.mock_dispatch.call_args.args[0].action == "list"
 
-    @patch("products.slack_app.backend.views.slack_command.dispatch_rules_command")
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration")
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration.slack_config")
-    def test_project_set_parses_team_id(self, mock_config: Any, mock_slack_cls: Any, mock_dispatch: Any) -> None:
-        mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
-        mock_slack_cls.return_value.missing_scopes.return_value = frozenset()
-        mock_slack_cls.slack_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
-
+    def test_project_set_parses_team_id(self) -> None:
         response = self._post_slash_command(self._default_payload(text=f"project {self.team.id}"))
 
         assert response.status_code == 200
-        mock_dispatch.assert_called_once()
-        parsed = mock_dispatch.call_args.args[0]
+        self.mock_dispatch.assert_called_once()
+        parsed = self.mock_dispatch.call_args.args[0]
         assert parsed.action == "project_set"
         assert parsed.project_team_id == self.team.id
 
+    def test_thread_ts_flows_through_to_dispatcher(self) -> None:
+        """Slash commands invoked inside a thread carry ``thread_ts`` on the payload;
+        passing it through keeps the bot's reply in-thread instead of dropping it at
+        the bottom of the channel."""
+        response = self._post_slash_command(self._default_payload(text="rules list", thread_ts="1700000000.001"))
+
+        assert response.status_code == 200
+        self.mock_dispatch.assert_called_once()
+        assert self.mock_dispatch.call_args.kwargs["thread_ts"] == "1700000000.001"
+
 
 class TestSlashCommandWorkspaceMissing(_SlashCommandTestBase):
-    @patch("products.slack_app.backend.views.slack_command.SlackIntegration.slack_config")
-    def test_unknown_workspace_returns_not_connected_message(self, mock_config: Any) -> None:
-        mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
+    def test_unknown_workspace_returns_not_connected_message(self) -> None:
         response = self._post_slash_command(self._default_payload(team_id="T_UNKNOWN", text="help"))
         assert response.status_code == 200
         body = response.json()

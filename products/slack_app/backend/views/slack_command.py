@@ -22,7 +22,6 @@ from posthog.models.integration import SlackIntegration, SlackIntegrationError, 
 from products.slack_app.backend.analytics import capture_slack_event
 from products.slack_app.backend.api import (
     REQUIRED_SLACK_SCOPES,
-    ROUTE_HANDLED_LOCALLY,
     ROUTE_NO_INTEGRATION,
     ROUTE_PROXY_FAILED,
     SLACK_INTEGRATION_KIND,
@@ -59,21 +58,25 @@ def slack_app_command_handler(request: HttpRequest) -> HttpResponse:
         logger.warning("slack_app_slash_command_invalid_request", error=str(e))
         return HttpResponse("Invalid request", status=403)
 
+    # Slack retries slash commands when our HTTP response runs past the 3-second budget.
+    # Acknowledge the retry without re-running dispatch — the original request is still
+    # in flight (or has already produced the bot's reply) and re-dispatching would
+    # produce duplicate side effects, most notably an extra ``rules add`` row.
+    retry_num = request.headers.get("X-Slack-Retry-Num")
+    if retry_num:
+        logger.info("slack_app_slash_command_retry", retry_num=retry_num)
+        return HttpResponse(status=200)
+
     payload = request.POST
     slack_team_id = payload.get("team_id", "")
     slack_user_id = payload.get("user_id", "")
     channel_id = payload.get("channel_id", "")
+    # ``thread_ts`` is only present when the slash command was invoked from
+    # inside a thread; passing it through keeps the bot's reply in-thread instead
+    # of dropping it at the bottom of the channel.
+    thread_ts = payload.get("thread_ts", "") or ""
     raw_text = (payload.get("text") or "").strip()
     command_name = payload.get("command") or SLASH_COMMAND_NAME
-
-    logger.info(
-        "slack_app_slash_command_received",
-        slack_team_id=slack_team_id,
-        slack_user_id=slack_user_id,
-        channel_id=channel_id,
-        command=command_name,
-        sub_command=raw_text.split()[0].lower() if raw_text else "",
-    )
 
     if not slack_team_id or not slack_user_id:
         return _ephemeral_response("Missing Slack payload fields.")
@@ -82,6 +85,17 @@ def slack_app_command_handler(request: HttpRequest) -> HttpResponse:
     # an argument-less invocation should at least explain what the command does.
     sub_command_text = raw_text or "help"
     parsed = parse_rules_command(sub_command_text)
+
+    logger.info(
+        "slack_app_slash_command_received",
+        slack_team_id=slack_team_id,
+        slack_user_id=slack_user_id,
+        channel_id=channel_id,
+        command=command_name,
+        # ``""`` distinguishes bare ``/posthog`` from explicit ``/posthog <unknown>``
+        # in analytics; the parser maps both to a ``help`` action downstream.
+        sub_command=parsed.action if parsed is not None else "" if not raw_text else "unknown",
+    )
     if parsed is None:
         return _ephemeral_response(_unknown_command_help(command_name))
 
@@ -105,18 +119,20 @@ def slack_app_command_handler(request: HttpRequest) -> HttpResponse:
         incoming_host=incoming_host,
         can_defer=can_defer,
     )
+    # resolve_region_or_terminal_route never returns ROUTE_HANDLED_LOCALLY — it
+    # returns ``None`` when the caller should keep handling locally, or one of
+    # ROUTE_NO_INTEGRATION / ROUTE_PROXY_FAILED / ROUTE_PROXIED on terminal exits.
+    if region_route == ROUTE_NO_INTEGRATION:
+        return _ephemeral_response(
+            "This Slack workspace isn't connected to a PostHog organization. "
+            "Connect it from a project's *Integrations* page first."
+        )
+    if region_route == ROUTE_PROXY_FAILED:
+        return _ephemeral_response("Couldn't reach the PostHog backend — try again in a moment.")
     if region_route is not None:
-        if region_route == ROUTE_NO_INTEGRATION:
-            return _ephemeral_response(
-                "This Slack workspace isn't connected to a PostHog organization. "
-                "Connect it from a project's *Integrations* page first."
-            )
-        if region_route == ROUTE_PROXY_FAILED:
-            return _ephemeral_response("Couldn't reach the PostHog backend — try again in a moment.")
-        # Anything else (ROUTE_PROXIED) means the sibling region is handling
-        # the work and will post the bot's reply itself. Ack Slack with 200.
-        if region_route != ROUTE_HANDLED_LOCALLY:
-            return HttpResponse(status=200)
+        # ROUTE_PROXIED: the sibling region already accepted the forwarded payload
+        # and will post the bot's reply through its own Slack client. Ack with 200.
+        return HttpResponse(status=200)
 
     user_resolution = resolve_user_for_workspace(
         workspace_result=workspace_result,
@@ -132,7 +148,7 @@ def slack_app_command_handler(request: HttpRequest) -> HttpResponse:
         slack_user_id=slack_user_id,
         user_id=user_resolution.user.id,
         channel=channel_id,
-        thread_ts="",
+        thread_ts=thread_ts,
     )
     integration = target_resolution.integration
     if integration is None:
@@ -153,11 +169,12 @@ def slack_app_command_handler(request: HttpRequest) -> HttpResponse:
             slack,
             integration,
             channel=channel_id,
-            thread_ts="",
+            thread_ts=thread_ts,
             slack_user_id=slack_user_id,
             slack_workspace_id=slack_team_id,
             user_id=user_resolution.user.id,
             workspace_candidates=workspace_candidates,
+            command_prefix=command_name,
         )
         capture_slack_event(
             integration,
