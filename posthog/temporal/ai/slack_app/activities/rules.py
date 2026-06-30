@@ -23,10 +23,10 @@ def handle_posthog_code_rules_command_activity(
 ) -> PostHogCodeRulesCommandResult:
     from posthog.models.integration import Integration, SlackIntegration
 
-    from products.slack_app.backend.api import _parse_rules_command
+    from products.slack_app.backend.api import parse_rules_command
     from products.slack_app.backend.services.commands import dispatch_rules_command
 
-    command = _parse_rules_command(inputs.event.get("text", ""))
+    command = parse_rules_command(inputs.event.get("text", ""))
     if not command:
         return PostHogCodeRulesCommandResult(status="not_a_command")
     # Picker flow is unique to this workflow; the command service can't drive a
@@ -119,7 +119,7 @@ def handle_posthog_code_slack_mention_command_activity(
 ) -> PostHogCodeSlackMentionCommandResult:
     from posthog.models.integration import SlackIntegration
 
-    from products.slack_app.backend.api import _parse_rules_command
+    from products.slack_app.backend.api import parse_rules_command
     from products.slack_app.backend.services.commands import dispatch_rules_command, resolve_command_target
 
     event = inputs.event
@@ -129,7 +129,7 @@ def handle_posthog_code_slack_mention_command_activity(
     if not channel or not thread_ts or not slack_user_id:
         return PostHogCodeSlackMentionCommandResult(status="done")
 
-    command = _parse_rules_command(event.get("text", ""))
+    command = parse_rules_command(event.get("text", ""))
     if command is None:
         return PostHogCodeSlackMentionCommandResult(status="done")
 

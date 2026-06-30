@@ -26,12 +26,12 @@ from products.slack_app.backend.api import (
     ROUTE_NO_INTEGRATION,
     ROUTE_PROXY_FAILED,
     SLACK_INTEGRATION_KIND,
-    _cross_region_routing_enabled,
-    _is_us_host,
-    _other_region_domain,
-    _parse_rules_command,
-    _resolve_region_or_terminal_route,
-    _was_proxied,
+    cross_region_routing_enabled,
+    is_us_host,
+    other_region_domain,
+    parse_rules_command,
+    resolve_region_or_terminal_route,
+    was_proxied,
 )
 from products.slack_app.backend.services.commands import dispatch_rules_command, resolve_command_target
 from products.slack_app.backend.services.integration_resolver import (
@@ -48,7 +48,7 @@ SLASH_COMMAND_NAME = "/posthog"
 
 
 @csrf_exempt
-def posthog_code_command_handler(request: HttpRequest) -> HttpResponse:
+def slack_app_command_handler(request: HttpRequest) -> HttpResponse:
     if request.method != "POST":
         return HttpResponse(status=405)
 
@@ -81,21 +81,21 @@ def posthog_code_command_handler(request: HttpRequest) -> HttpResponse:
     # Treat a bare ``/posthog`` as ``/posthog help`` — Slack convention is that
     # an argument-less invocation should at least explain what the command does.
     sub_command_text = raw_text or "help"
-    parsed = _parse_rules_command(sub_command_text)
+    parsed = parse_rules_command(sub_command_text)
     if parsed is None:
         return _ephemeral_response(_unknown_command_help(command_name))
 
     incoming_host = request.get_host()
-    proxied = _was_proxied(request)
-    other_domain = _other_region_domain(incoming_host)
-    can_defer = _cross_region_routing_enabled() and not _is_us_host(incoming_host) and not proxied
+    proxied = was_proxied(request)
+    other_domain = other_region_domain(incoming_host)
+    can_defer = cross_region_routing_enabled() and not is_us_host(incoming_host) and not proxied
 
     workspace_result = load_integrations(
         slack_team_id=slack_team_id,
         kinds=[SLACK_INTEGRATION_KIND],
         slack_user_id=slack_user_id,
     )
-    region_route = _resolve_region_or_terminal_route(
+    region_route = resolve_region_or_terminal_route(
         request,
         slack_team_id,
         candidates_present=bool(workspace_result.candidates),
