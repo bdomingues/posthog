@@ -772,6 +772,7 @@ describe('impersonationNoticeLogic', () => {
                 ([url]) => typeof url === 'string' && url.includes('/admin/login/user/')
             )
             expect(loginCall).toBeUndefined()
+            expect(lemonToast.error).toHaveBeenCalled()
             fetchSpy.mockRestore()
         })
 

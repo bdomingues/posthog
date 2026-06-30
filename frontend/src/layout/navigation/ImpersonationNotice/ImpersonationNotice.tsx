@@ -110,6 +110,7 @@ function ImpersonationExpiredOverlay({ expiredSessionInfo }: { expiredSessionInf
             description={`Your session impersonating ${expiredSessionInfo.email} has expired.`}
             confirmText="Re-impersonate"
             loading={isReImpersonating}
+            initialReason={expiredSessionInfo.reason ?? ''}
             onConfirm={(reason) => reImpersonate(reason, readOnly)}
             cancelButton={{
                 label: 'Return to admin',
@@ -182,6 +183,7 @@ function ImpersonationNoticeContent(): JSX.Element {
                 email: user.email,
                 userId: user.id,
                 isImpersonatedUntil: user.is_impersonated_until ?? null,
+                reason: user.is_impersonated_reason ?? null,
             })
         }
     }

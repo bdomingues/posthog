@@ -22,6 +22,9 @@ export interface ExpiredSessionInfo {
     // /api/users/@me/ response represents an actual renewal, not the same
     // already-expired session echoing back.
     isImpersonatedUntil: string | null
+    // Snapshotted at expiry so the re-impersonate modal can pre-fill it; the live
+    // user object may change while the overlay is open.
+    reason?: string | null
 }
 
 export interface ImpersonationTicketContext {
@@ -230,6 +233,7 @@ export const impersonationNoticeLogic = kea<impersonationNoticeLogicType>([
             // so we never POST an empty one (the backend requires a non-empty reason).
             const resolvedReason = reason?.trim() || values.user?.is_impersonated_reason?.trim()
             if (!resolvedReason) {
+                lemonToast.error('A reason is required to change user')
                 actions.changeUserFailure('A reason is required to change user')
                 return
             }
