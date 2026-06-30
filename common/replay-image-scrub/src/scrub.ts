@@ -369,9 +369,11 @@ async function compose(
                 bl += src.data[idx + 2]
             }
         }
-        r = Math.round(r / n)
-        g = Math.round(g / n)
-        bl = Math.round(bl / n)
+        // Quantize the fill to the top 4 bits per channel (16 levels each, 12 bits total instead of
+        // 24) so it carries even less signal about the underlying text/background colours.
+        r = Math.round(r / n) & 0xf0
+        g = Math.round(g / n) & 0xf0
+        bl = Math.round(bl / n) & 0xf0
         for (let y = b.top; y < b.top + b.height; y++) {
             let idx = (y * W + b.left) * 3
             for (let x = 0; x < b.width; x++, idx += 3) {
