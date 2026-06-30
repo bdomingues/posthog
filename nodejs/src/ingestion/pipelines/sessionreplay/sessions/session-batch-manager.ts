@@ -105,6 +105,18 @@ export class SessionBatchManager {
         this.keyStore = config.keyStore
         this.encryptor = config.encryptor
 
+        this.currentBatch = this.createBatch()
+        this.lastFlushTime = Date.now()
+    }
+
+    /**
+     * Mints a fresh batch recorder and sets it as the current batch.
+     *
+     * The manager owns the current-batch reference so partition revocation (driven from
+     * outside the pipeline) can act on it. Used as the beforeBatch hook of the accumulating
+     * pipeline, which calls this to start a new accumulation cycle after each flush.
+     */
+    public createBatch(): SessionBatchRecorder {
         this.currentBatch = new SessionBatchRecorder(
             this.offsetManager,
             this.fileStorage,
@@ -119,6 +131,7 @@ export class SessionBatchManager {
             this.featuresRolloutPercentage
         )
         this.lastFlushTime = Date.now()
+        return this.currentBatch
     }
 
     /**
@@ -134,20 +147,7 @@ export class SessionBatchManager {
     public async flush(): Promise<void> {
         logger.info('🔁', 'session_batch_manager_flushing', { batchSize: this.currentBatch.size })
         await this.currentBatch.flush()
-        this.currentBatch = new SessionBatchRecorder(
-            this.offsetManager,
-            this.fileStorage,
-            this.metadataStore,
-            this.consoleLogStore,
-            this.featureStore,
-            this.sessionTracker,
-            this.sessionFilter,
-            this.keyStore,
-            this.encryptor,
-            this.maxEventsPerSessionPerBatch,
-            this.featuresRolloutPercentage
-        )
-        this.lastFlushTime = Date.now()
+        this.createBatch()
     }
 
     /**
