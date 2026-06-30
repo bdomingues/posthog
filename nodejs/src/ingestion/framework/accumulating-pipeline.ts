@@ -76,9 +76,12 @@ export class AccumulatingPipeline<
     private flushDue = false
     private timer?: ReturnType<typeof setInterval>
 
-    // Serializes ALL accumulator mutation — feed-drain, size-flush, and the timer-driven flush
-    // can never run concurrently, so the external accumulator stays single-threaded and the
-    // caller's record/flush steps carry no locking burden. Mirrors BatchingPipeline.
+    // Serializes ALL accumulator access — feed (context mint + tag + record buffer push), the
+    // next()/flush() drain, the size flush, and the timer-driven flush. This is what stops feed()
+    // from tagging elements against a batch context that a concurrent flush is re-minting (which
+    // would fold them into an already-flushed recorder and lose them), and keeps the external
+    // accumulator single-threaded so the caller's record/flush steps carry no locking burden.
+    // Mirrors BatchingPipeline's pump mutex.
     private pumpLimit = pLimit(1)
 
     // Wakes a consumer that PARKS on next() instead of polling (see LIVENESS INVARIANT above).
@@ -129,13 +132,17 @@ export class AccumulatingPipeline<
         return this.flushNow()
     }
 
-    public async feed(elements: OkResultWithContext<TRecordIn, CRecordIn>[]): Promise<void> {
-        const batchContext = await this.ensureBatchContext()
-        const tagged = elements.map((element) => ({
-            result: { ...element.result, value: { ...element.result.value, ...batchContext } },
-            context: element.context,
-        }))
-        this.recordPipeline.feed(tagged)
+    public feed(elements: OkResultWithContext<TRecordIn, CRecordIn>[]): Promise<void> {
+        // Under the pump mutex so the context read + tagging + buffer push is atomic w.r.t. a
+        // concurrent flush re-minting the batch context (e.g. revoke-triggered flush).
+        return this.pumpLimit(async () => {
+            const batchContext = await this.ensureBatchContext()
+            const tagged = elements.map((element) => ({
+                result: { ...element.result, value: { ...element.result.value, ...batchContext } },
+                context: element.context,
+            }))
+            this.recordPipeline.feed(tagged)
+        })
     }
 
     public next(): Promise<AccumulatingResult<TRecordOut, CRecordOut, TFlushOut, CFlushOut, R> | null> {

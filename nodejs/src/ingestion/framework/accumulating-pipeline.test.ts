@@ -252,6 +252,71 @@ describe('AccumulatingPipeline', () => {
         })
     })
 
+    it('serializes feed against a concurrent flush re-mint so records are not lost', async () => {
+        // beforeBatch for the first re-mint (batchId 1) blocks on a gate, so we can deterministically
+        // issue a feed() while a flush() is mid re-mint and assert the fed record lands in the new batch.
+        let batchSeq = 0
+        const gate: { open: (() => void) | null } = { open: null }
+        const makeContext = (batchId: number) =>
+            createOkContext<BeforeAccumulationOutput<Batch>>({ batchContext: { records: [], batchId } }, {})
+        const beforeProcess = jest.fn((input: OkResultWithContext<BeforeAccumulationInput, Record<string, never>>) => {
+            const seq = batchSeq++
+            const batchId = input.result.value.batchId
+            if (seq === 1) {
+                return new Promise((resolve) => {
+                    gate.open = () => resolve(makeContext(batchId))
+                })
+            }
+            return Promise.resolve(makeContext(batchId))
+        })
+        const beforePipeline = { process: beforeProcess } as unknown as Pipeline<
+            BeforeAccumulationInput,
+            BeforeAccumulationOutput<Batch>,
+            Record<string, never>
+        >
+        const pipeline = new AccumulatingPipeline<
+            RecordIn,
+            RecordIn,
+            Record<string, never>,
+            Record<string, never>,
+            Batch,
+            { id: number },
+            Record<string, never>,
+            { id: number },
+            Record<string, never>
+        >(
+            new FoldingRecordPipeline(),
+            beforePipeline,
+            (batchContext) => {
+                const units = batchContext.records.map((id) => createOkContext({ id }, {}))
+                batchContext.records.length = 0
+                return units
+            },
+            new PassthroughFlushPipeline(),
+            { shouldFlush: () => false, maxBatchAgeMs: 60_000 }
+        )
+
+        await pipeline.feed(feedBatch([1]))
+
+        // flush() drains record [1], flushes it, then blocks on the re-mint gate while holding the mutex.
+        const flushPromise = pipeline.flush()
+        while (gate.open === null) {
+            await new Promise((resolve) => setImmediate(resolve))
+        }
+
+        // Issued while the flush is mid re-mint: must queue behind it, not tag the batch being flushed.
+        const feedPromise = pipeline.feed(feedBatch([2]))
+        gate.open()
+
+        const firstFlush = await flushPromise
+        await feedPromise
+
+        expect(firstFlush!.elements.map((e) => isOkResult(e.result) && e.result.value)).toEqual([{ id: 1 }])
+
+        const secondFlush = await pipeline.flush()
+        expect(secondFlush!.elements.map((e) => isOkResult(e.result) && e.result.value)).toEqual([{ id: 2 }])
+    })
+
     it('throws when beforeBatch returns a non-ok result', async () => {
         beforeBatch = jest.fn(() => Promise.resolve({ result: { type: 99 }, context: {} }))
         const beforePipeline = { process: beforeBatch } as unknown as Pipeline<
