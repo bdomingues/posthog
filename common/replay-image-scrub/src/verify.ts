@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- CLI output script: console output is the whole point */
 /**
  * Self-verifying test: a scrubbed image should contain no READABLE text. We scrub with PRODUCTION
  * settings, then run OCR (tesseract — an independent model doing recognition, not the DBNet detector
@@ -64,8 +65,16 @@ async function main(): Promise<void> {
         const leak = (100 * residWords.length) / Math.max(1, origWords.length)
         worst = Math.max(worst, leak)
         const flag = residWords.length === 0 ? 'PASS' : leak < 2 ? 'ok' : 'LEAK'
-
+        console.log(
+            `  ${flag.padEnd(4)} ${basename(f).padEnd(34)} readable(orig)=${String(origWords.length).padStart(4)}  readable(scrubbed)=${String(residWords.length).padStart(3)}  (${leak.toFixed(1)}%)`
+        )
         if (residWords.length) {
+            console.log(
+                `        leaked: ${residWords
+                    .slice(0, 8)
+                    .map((w) => JSON.stringify(w.text))
+                    .join(', ')}`
+            )
         }
         const rects = residWords
             .map(
@@ -78,6 +87,7 @@ async function main(): Promise<void> {
             .toFile('out/verify_' + basename(f))
     }
     await tess.terminate()
+    console.log(`\n  worst readable-text leak: ${worst.toFixed(1)}%  ${worst < 2 ? '-> PASS' : '-> needs tuning'}`)
 }
 
 main().catch((e) => {

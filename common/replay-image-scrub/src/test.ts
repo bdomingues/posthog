@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- CLI output script: console output is the whole point */
 /**
  * Test suite over many real images. Two independent checks, both end-to-end through advancedScrub:
  *
@@ -28,6 +29,7 @@ import { detectFacesYunet } from './yunet.ts'
 const ROOT = new URL('..', import.meta.url).pathname
 const OCR_CONF = 60
 const OCR_UPSCALE = 2
+const OCR_MAX_LONG = 2200 // cap OCR input long side so retina fixtures don't become 30+ megapixels
 const TEXT_LEAK_MAX_PCT = 2 // allow a little sub-lexical OCR noise on mosaic
 
 async function listImages(dir: string): Promise<string[]> {
@@ -44,8 +46,11 @@ interface Word {
 }
 
 async function readableWords(tess: Worker, img: Buffer, W: number, H: number): Promise<number> {
+    // Upscale small images for OCR sensitivity, but cap the long side so a retina screenshot
+    // doesn't balloon to tens of megapixels (slow, and it's already high-res).
+    const scale = Math.max(1, Math.min(OCR_UPSCALE, OCR_MAX_LONG / Math.max(W, H)))
     const big = await sharp(img)
-        .resize(Math.round(W * OCR_UPSCALE), Math.round(H * OCR_UPSCALE), { fit: 'fill' })
+        .resize(Math.round(W * scale), Math.round(H * scale), { fit: 'fill' })
         .png()
         .toBuffer()
     const { data } = await tess.recognize(big, {}, { blocks: true })
@@ -96,9 +101,14 @@ async function testText(
         if (!ok) {
             fails++
         }
+        console.log(
+            `  ${ok ? 'PASS' : 'leak'} text ${basename(f).padEnd(36)} orig=${String(orig).padStart(4)} scrubbed=${String(resid).padStart(3)} (${leak.toFixed(1)}%)`
+        )
     }
     const verdict = gate ? (fails === 0 ? 'PASS' : 'FAIL') : 'report'
-
+    console.log(
+        `  ${label}: ${files.length - fails}/${files.length} clean, worst leak ${worst.toFixed(1)}% [${verdict}]\n`
+    )
     return { pass: !gate || fails === 0 }
 }
 
@@ -125,9 +135,14 @@ async function testFaces(models: Models, files: string[]): Promise<{ pass: boole
         if (!ok) {
             imgFails++
         }
+        console.log(
+            `  ${ok ? 'PASS' : 'LEAK'} face ${basename(f).padEnd(36)} faces=${String(faces.length).padStart(3)} still-detectable=${String(leaked.length).padStart(3)}`
+        )
     }
     const pct = totalFaces ? (100 * redacted) / totalFaces : 100
-
+    console.log(
+        `  FACE: ${redacted}/${totalFaces} faces redacted (${pct.toFixed(1)}%), ${imgFails} image(s) with a leak\n`
+    )
     return { pass: imgFails === 0 }
 }
 
@@ -138,9 +153,13 @@ async function main(): Promise<void> {
     // GATE on session replay's representative domain: crisp rendered-UI text + faces.
     // REPORT on the harder scanned-document set (faint fax/scan print is out of domain; the user's
     // bar is best-effort, "not catastrophic if a little gets through").
-    const uiText = await listImages('corpus')
+    // Committed challenge fixtures (e.g. a full retina Wikipedia page: dense text + a face + a
+    // heraldic crest + a flag) exercise text and face redaction together, so they go in both lists.
+    const fixtures = await listImages('fixtures')
+    const uiText = [...(await listImages('corpus')), ...fixtures]
     const docText = await listImages('test-data/text')
-    const faceFiles = await listImages('test-data/faces')
+    const faceFiles = [...(await listImages('test-data/faces')), ...fixtures]
+    console.log(`UI text: ${uiText.length}   document text: ${docText.length}   faces: ${faceFiles.length}\n`)
 
     const ui = uiText.length ? await testText(models, tess, uiText, 'UI TEXT (gated)', true) : { pass: true }
     const docs = docText.length
@@ -151,7 +170,7 @@ async function main(): Promise<void> {
     await tess.terminate()
     void docs
     const pass = ui.pass && fc.pass
-
+    console.log(pass ? '=== PASS (gated checks) ===' : '=== FAILURES ===')
     if (!pass) {
         process.exit(1)
     }

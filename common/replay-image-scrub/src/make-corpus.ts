@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- CLI output script: console output is the whole point */
 /**
  * Build a small, representative corpus of session-replay-ish images:
  *  - synthetic "screenshots" (text-heavy UI) at desktop + mobile sizes  -> exercises the text path
@@ -98,6 +99,7 @@ async function main(): Promise<void> {
     }
 
     await writeFile(OUT + 'manifest.json', JSON.stringify(manifest, null, 2))
+    console.log(`corpus: ${manifest.length} images (${faceCount} face photos) in ${OUT}`)
 }
 
 main().catch((e) => {

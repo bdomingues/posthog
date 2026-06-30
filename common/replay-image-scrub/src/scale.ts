@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- CLI output script: console output is the whole point */
 /**
  * Multi-process scaling test for BOTH pipelines under the same one-core-per-process pin, so the
  * blur baseline and the advanced path are measured identically and the ratio holds at machine scale.
@@ -49,6 +50,7 @@ function runWorker(mode: string): Promise<{ imgs: number; ms: number }> {
 }
 
 async function sweep(mode: string): Promise<number> {
+    console.log(`\n=== ${mode.toUpperCase()} (one core per process) ===`)
     let single = 0
     let best = 0
     for (const w of levels) {
@@ -60,13 +62,20 @@ async function sweep(mode: string): Promise<number> {
             single = agg
         }
         best = Math.max(best, agg)
+        console.log(
+            `  ${String(w).padStart(2)} procs: ${agg.toFixed(1).padStart(7)} img/s   (${(agg / single).toFixed(1)}x vs 1 proc)`
+        )
     }
     return best
 }
 
 async function main(): Promise<void> {
+    console.log(`machine: ${cores} cores; each worker processes ${WORK_N} images`)
     const blur = await sweep('blur')
     const adv = await sweep('advanced')
+    console.log(`\n=== RATIO at machine scale ===`)
+    console.log(`  blur peak ${blur.toFixed(0)} img/s   advanced peak ${adv.toFixed(0)} img/s`)
+    console.log(`  advanced costs ${(blur / adv).toFixed(1)}x the blur baseline at full machine utilization.`)
 }
 
 main().catch((e) => {

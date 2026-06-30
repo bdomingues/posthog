@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- CLI output script: console output is the whole point */
 /**
  * One worker process. Loads what MODE needs, processes WORK_N images, and writes the processing
  * window (excludes model load + warmup) as @@R@@{json} on stdout. Both modes pin sharp to one
