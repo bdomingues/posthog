@@ -77,6 +77,7 @@ export const CustomOauth2IntegrationsCreateBody = /* @__PURE__ */ zod
                     ),
                 refreshed_at: zod
                     .number()
+                    .nullable()
                     .describe('Unix seconds of the last successful token mint, set by the sync worker.'),
             })
             .describe(
@@ -167,6 +168,7 @@ export const CustomOauth2IntegrationsUpdateBody = /* @__PURE__ */ zod
                     ),
                 refreshed_at: zod
                     .number()
+                    .nullable()
                     .describe('Unix seconds of the last successful token mint, set by the sync worker.'),
             })
             .describe(
@@ -257,6 +259,7 @@ export const CustomOauth2IntegrationsPartialUpdateBody = /* @__PURE__ */ zod
                     ),
                 refreshed_at: zod
                     .number()
+                    .nullable()
                     .describe('Unix seconds of the last successful token mint, set by the sync worker.'),
             })
             .describe(

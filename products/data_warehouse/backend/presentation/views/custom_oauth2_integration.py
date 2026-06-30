@@ -1,7 +1,9 @@
 from typing import Any
 
+import structlog
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
+from prometheus_client import Counter
 from rest_framework import serializers, viewsets
 
 from posthog.api.routing import TeamAndOrgViewSetMixin
@@ -10,6 +12,17 @@ from posthog.models.scoping import team_scope
 from posthog.security.url_validation import is_url_allowed
 
 from products.warehouse_sources.backend.facade.models import CustomOAuth2Integration, ExternalDataSource
+
+logger = structlog.get_logger(__name__)
+
+# Credential lifecycle events on the custom OAuth2 store, so secret creation and rotation are graphable.
+# "created" = a new integration with secrets; "reconnected" = a PATCH that rotated the client secret
+# or refresh token (the recovery path for a revoked/expired token).
+custom_oauth2_integration_credential_counter = Counter(
+    "warehouse_custom_oauth2_integration_credential",
+    "Number of custom OAuth2 integration credential lifecycle events from the API",
+    labelnames=["action"],
+)
 
 _GRANT_TYPE_CHOICES = [("client_credentials", "client_credentials"), ("refresh_token", "refresh_token")]
 _CLIENT_AUTH_METHOD_CHOICES = [("body", "body"), ("basic", "basic")]
@@ -74,7 +87,10 @@ class CustomOAuth2ConfigSerializer(serializers.Serializer):
         help_text="How the client credentials are sent: 'body' (form params) or 'basic' (HTTP Basic).",
     )
     refreshed_at = serializers.IntegerField(
-        read_only=True, help_text="Unix seconds of the last successful token mint, set by the sync worker."
+        read_only=True,
+        required=False,
+        allow_null=True,
+        help_text="Unix seconds of the last successful token mint, set by the sync worker.",
     )
 
     def validate_token_url(self, value: str) -> str:
@@ -151,6 +167,21 @@ class CustomOAuth2IntegrationSerializer(serializers.ModelSerializer):
     def get_has_refresh_token(self, obj: CustomOAuth2Integration) -> bool:
         return bool(obj.sensitive_config.get("refresh_token"))
 
+    def validate_external_data_source(self, value: ExternalDataSource | None) -> ExternalDataSource | None:
+        # The model's UniqueConstraint(team, external_data_source) only enforces non-null links. `team`
+        # isn't a serializer field, so DRF skips the auto UniqueTogetherValidator and a duplicate link
+        # would surface as an IntegrityError (500). Enforce it here as a 400 instead. The queryset is
+        # team-scoped so it can never leak whether another team already links the same source.
+        if value is None:
+            return value
+        team = self.context["get_team"]()
+        clash = CustomOAuth2Integration.objects.for_team(team.pk).filter(external_data_source=value)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError("This source already has an OAuth2 integration.")
+        return value
+
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         is_create = self.instance is None
         config = attrs.get("config")
@@ -188,11 +219,26 @@ class CustomOAuth2IntegrationSerializer(serializers.ModelSerializer):
         if refresh_token:
             sensitive_config["refresh_token"] = refresh_token
         validated_data["sensitive_config"] = sensitive_config
-        return super().create(validated_data)
+        instance = super().create(validated_data)
+        custom_oauth2_integration_credential_counter.labels("created").inc()
+        logger.info(
+            "Created custom OAuth2 integration",
+            integration_id=str(instance.pk),
+            team_id=instance.team_id,
+            grant_type=instance.config.get("grant_type", "client_credentials"),
+        )
+        return instance
 
     def update(self, instance: CustomOAuth2Integration, validated_data: dict[str, Any]) -> CustomOAuth2Integration:
         client_secret = validated_data.pop("client_secret", None)
         refresh_token = validated_data.pop("refresh_token", None)
+        # `config` maps onto a JSONField, so super().update() would setattr() the whole dict, wiping any
+        # key the client didn't resend — including worker-written ones (`refreshed_at`) and the stored
+        # `grant_type` (silently downgrading a refresh_token integration). Merge instead so a partial
+        # config PATCH only overlays the keys it carries.
+        incoming_config = validated_data.pop("config", None)
+        if incoming_config is not None:
+            instance.config = {**(instance.config or {}), **incoming_config}
         rotated_secret = False
         if client_secret:
             instance.sensitive_config["client_secret"] = client_secret
@@ -206,7 +252,17 @@ class CustomOAuth2IntegrationSerializer(serializers.ModelSerializer):
         if rotated_secret:
             # Reconnecting clears the broken-token state so the source stops surfacing the error.
             instance.errors = ""
-        return super().update(instance, validated_data)
+        updated = super().update(instance, validated_data)
+        if rotated_secret:
+            custom_oauth2_integration_credential_counter.labels("reconnected").inc()
+            logger.info(
+                "Reconnected custom OAuth2 integration",
+                integration_id=str(updated.pk),
+                team_id=updated.team_id,
+                rotated_client_secret=bool(client_secret),
+                rotated_refresh_token=bool(refresh_token),
+            )
+        return updated
 
 
 class CustomOAuth2IntegrationViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):

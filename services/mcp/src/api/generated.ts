@@ -14170,8 +14170,11 @@ export namespace Schemas {
        * * `body` - body
        * * `basic` - basic */
       client_auth_method?: ClientAuthMethodEnum;
-      /** Unix seconds of the last successful token mint, set by the sync worker. */
-      readonly refreshed_at: number;
+      /**
+         * Unix seconds of the last successful token mint, set by the sync worker.
+         * @nullable
+         */
+      readonly refreshed_at: number | null;
     }
 
     /**

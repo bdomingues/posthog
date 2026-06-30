@@ -84,8 +84,11 @@ export interface CustomOAuth2ConfigApi {
      * * `body` - body
      * * `basic` - basic */
     client_auth_method?: ClientAuthMethodEnumApi
-    /** Unix seconds of the last successful token mint, set by the sync worker. */
-    readonly refreshed_at: number
+    /**
+     * Unix seconds of the last successful token mint, set by the sync worker.
+     * @nullable
+     */
+    readonly refreshed_at: number | null
 }
 
 /**
