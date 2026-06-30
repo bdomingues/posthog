@@ -593,6 +593,7 @@ layer = "modules"
 path = "products.slack_app"
 depends_on = [
     "posthog",
+    "products.conversations",
     "products.dashboards",
     "products.product_analytics",
     "products.signals",
