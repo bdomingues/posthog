@@ -315,7 +315,13 @@ class CustomOAuth2IntegrationViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewS
             serializer.save(team_id=self.team_id, created_by=self.request.user)
 
     def perform_update(self, serializer: serializers.BaseSerializer) -> None:
-        self._assert_can_edit_source(serializer.instance.external_data_source)
+        # A PATCH can also rebind the integration onto a different source, so require editor access to both
+        # the current source and the requested one — otherwise an editor of one source could reserve the
+        # integration against a restricted source they can't edit.
+        current_source = serializer.instance.external_data_source
+        requested_source = serializer.validated_data.get("external_data_source", current_source)
+        self._assert_can_edit_source(current_source)
+        self._assert_can_edit_source(requested_source)
         with team_scope(self.team_id):
             serializer.save()
 

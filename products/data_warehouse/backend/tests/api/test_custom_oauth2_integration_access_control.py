@@ -131,3 +131,21 @@ class TestCustomOAuth2IntegrationAccessControl(APIBaseTest):
         )
 
         assert response.status_code == status.HTTP_200_OK
+
+    def test_cannot_rebind_integration_to_inaccessible_source(self, _mock):
+        # A PATCH that rebinds the integration onto a source the caller can't edit must be rejected — even
+        # if they can edit the integration's current source — otherwise they could reserve it against a
+        # restricted source.
+        self._restrict_member_to_allowed_source(level="editor")
+        target = self._make_source("rebind_target")  # no explicit grant → member can't edit it
+        self.client.force_login(self.member)
+
+        response = self.client.patch(
+            self._url(f"{self.allowed_integration.id}/"),
+            {"external_data_source": str(target.id)},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        reloaded = CustomOAuth2Integration.objects.for_team(self.team.pk).get(id=self.allowed_integration.id)
+        assert str(reloaded.external_data_source_id) == str(self.allowed_source.id)
