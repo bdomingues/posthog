@@ -166,6 +166,19 @@ describe('AccumulatingPipeline', () => {
         expect(beforeBatch).not.toHaveBeenCalled()
     })
 
+    it('flush() drains buffered records and flushes immediately, below the size threshold', async () => {
+        const pipeline = createPipeline({ flushAt: 100 })
+
+        await pipeline.feed(feedBatch([1, 2]))
+        // No next() drain: flush() must fold the buffered records in itself before flushing.
+        const flushed = await pipeline.flush()
+
+        expect(flushed).toMatchObject({ flushed: true })
+        expect(flushed!.elements).toHaveLength(2)
+        // re-minted, so a subsequent flush with nothing accumulated is a no-op
+        expect(await pipeline.flush()).toBeNull()
+    })
+
     describe('age timer', () => {
         beforeEach(() => jest.useFakeTimers())
         afterEach(() => jest.useRealTimers())

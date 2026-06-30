@@ -121,7 +121,12 @@ export class AccumulatingPipeline<
             clearInterval(this.timer)
             this.timer = undefined
         }
-        return this.pumpLimit(() => this.flushNow())
+        return this.pumpLimit(() => this.drainAndFlush())
+    }
+
+    private async drainAndFlush(): Promise<AccumulatingResult<TRecordOut, CRecordOut, TFlushOut, CFlushOut, R> | null> {
+        await this.drain(this.recordPipeline)
+        return this.flushNow()
     }
 
     public async feed(elements: OkResultWithContext<TRecordIn, CRecordIn>[]): Promise<void> {
@@ -135,6 +140,15 @@ export class AccumulatingPipeline<
 
     public next(): Promise<AccumulatingResult<TRecordOut, CRecordOut, TFlushOut, CFlushOut, R> | null> {
         return this.pumpLimit(() => this.pump())
+    }
+
+    /**
+     * Forces an immediate flush: drains any buffered record work into the accumulator, then flushes.
+     * The age timer keeps running. Used on Kafka partition revocation — rather than reaching into the
+     * live batch to discard the revoked partition, we process what we have and flush it.
+     */
+    public flush(): Promise<AccumulatingResult<TRecordOut, CRecordOut, TFlushOut, CFlushOut, R> | null> {
+        return this.pumpLimit(() => this.drainAndFlush())
     }
 
     /**
