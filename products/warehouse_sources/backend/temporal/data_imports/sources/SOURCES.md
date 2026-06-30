@@ -301,6 +301,7 @@ doesn't conflict with concurrent PRs.
 - aha
 - ahrefs
 - airbyte
+- airops
 - akeneo
 - alpaca_broker_api
 - alpha_vantage
@@ -378,6 +379,7 @@ doesn't conflict with concurrent PRs.
 - dolibarr
 - dremio
 - dropbox
+- dub
 - dwolla
 - dynamics365
 - dynamodb
@@ -491,6 +493,7 @@ doesn't conflict with concurrent PRs.
 - linnworks
 - lokalise
 - looker
+- loops
 - luma
 - mailosaur
 - mailtrap
@@ -574,6 +577,7 @@ doesn't conflict with concurrent PRs.
 - planhat
 - plunk
 - pocket
+- podium
 - polygon
 - poplar
 - prestashop
@@ -593,6 +597,7 @@ doesn't conflict with concurrent PRs.
 - recreation
 - recruitee
 - reddit
+- redis
 - referralhero
 - rentcast
 - repairshopr
