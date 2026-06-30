@@ -279,14 +279,26 @@ export class SessionBatchRecorder {
      * @throws If the flush operation fails
      */
     public async flush(): Promise<SessionBlockMetadata[]> {
+        const blockMetadata = await this.flushToStorage()
+        await this.offsetManager.commit()
+        return blockMetadata
+    }
+
+    /**
+     * Writes the session recordings to storage and stores metadata, WITHOUT committing
+     * Kafka offsets. The caller commits offsets after a successful flush — keeping offset
+     * management outside the storage write path.
+     *
+     * @throws If the flush operation fails
+     */
+    public async flushToStorage(): Promise<SessionBlockMetadata[]> {
         logger.info('🔁', 'session_batch_recorder_flushing', {
             partitions: this.partitionSessions.size,
             totalSize: this._size,
         })
 
-        // If no sessions, commit offsets but skip writing the file
+        // If no sessions, skip writing the file
         if (this.partitionSessions.size === 0) {
-            await this.offsetManager.commit()
             logger.info('🔁', 'session_batch_recorder_flushed_no_sessions')
             return []
         }
@@ -389,7 +401,6 @@ export class SessionBatchRecorder {
             await this.consoleLogStore.flush()
             await this.featureStore.storeSessionFeatures(featureBlocks)
             await this.metadataStore.storeSessionBlocks(blockMetadata)
-            await this.offsetManager.commit()
 
             // Update metrics
             SessionBatchMetrics.incrementBatchesFlushed()
