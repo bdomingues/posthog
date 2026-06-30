@@ -1,0 +1,28 @@
+{
+    "name": "@posthog/replay-image-scrub",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Experimental session-replay image scrubber: NSFW gate + face blur + text-region blur, plus a self-verifying test harness. Standalone package (not yet wired into the pnpm workspace) so its heavy native ML deps stay out of the main plugin-server image until productionized as its own worker.",
+    "type": "module",
+    "scripts": {
+        "setup": "tsx scripts/setup.ts",
+        "corpus": "tsx src/make-corpus.ts",
+        "bench": "tsx src/bench.ts",
+        "scale": "tsx src/scale.ts",
+        "verify": "tsx src/verify.ts",
+        "test": "tsx src/test.ts"
+    },
+    "dependencies": {
+        "@tensorflow/tfjs": "^4.22.0",
+        "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+        "@tensorflow/tfjs-node": "^4.22.0",
+        "nsfwjs": "^4.2.1",
+        "onnxruntime-node": "^1.27.0",
+        "sharp": "^0.34.5",
+        "tesseract.js": "^6.0.1"
+    },
+    "devDependencies": {
+        "tsx": "^4.19.2",
+        "typescript": "^5.7.2"
+    }
+}

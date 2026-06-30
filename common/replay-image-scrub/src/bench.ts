@@ -1,0 +1,155 @@
+/**
+ * Throughput benchmark. Runs the corpus through three pipelines and reports images/sec, MB/sec,
+ * p50/p95 latency, and the advanced per-stage breakdown:
+ *   1. blur only            (current production baseline)
+ *   2. advanced + heuristic (model-free edge-density text detection)
+ *   3. advanced + dbnet     (native ONNX text detection)
+ *
+ * Usage: tsx src/bench.ts [--reps N]
+ */
+import './polyfill.ts' // must precede anything that loads tfjs-node
+
+import { readFile, readdir } from 'node:fs/promises'
+import { availableParallelism } from 'node:os'
+import sharp from 'sharp'
+
+import {
+    type Models,
+    type StageTimings,
+    type TextMode,
+    advancedScrub,
+    blurOnly,
+    disposeModels,
+    loadModels,
+} from './scrub.ts'
+
+// One libvips thread per sharp op, so image-level concurrency parallelizes across cores instead of
+// each op grabbing every core and oversubscribing.
+sharp.concurrency(1)
+
+const OUT = new URL('../corpus/', import.meta.url).pathname
+const reps = Number(process.argv.includes('--reps') ? process.argv[process.argv.indexOf('--reps') + 1] : 3)
+const cores = availableParallelism()
+
+function pct(xs: number[], p: number): number {
+    const s = [...xs].sort((a, b) => a - b)
+    return s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))]
+}
+const sum = (xs: number[]): number => xs.reduce((a, b) => a + b, 0)
+const fmt = (n: number): string => n.toFixed(1)
+
+interface Img {
+    f: string
+    buf: Buffer
+}
+interface Result {
+    mean: number
+    throughput: number
+    mbps: number
+    p50: number
+    p95: number
+    stages: StageTimings[]
+}
+
+async function runAdvanced(images: Img[], models: Models, mode: TextMode, totalBytes: number): Promise<Result> {
+    await advancedScrub(images[0].buf, models, mode) // warmup
+    const lat: number[] = []
+    const stages: StageTimings[] = []
+    const t0 = performance.now()
+    for (let r = 0; r < reps; r++) {
+        for (const img of images) {
+            const { t } = await advancedScrub(img.buf, models, mode)
+            lat.push(t.totalMs)
+            stages.push(t)
+        }
+    }
+    const wall = (performance.now() - t0) / 1000
+    return {
+        mean: sum(lat) / lat.length,
+        throughput: lat.length / wall,
+        mbps: totalBytes / 1e6 / wall,
+        p50: pct(lat, 50),
+        p95: pct(lat, 95),
+        stages,
+    }
+}
+
+function reportAdvanced(label: string, r: Result, blanked: number, n: number): void {
+    const avg = (k: keyof StageTimings): number => sum(r.stages.map((s) => s[k] as number)) / r.stages.length
+}
+
+async function main(): Promise<void> {
+    const files = (await readdir(OUT)).filter((f) => f.endsWith('.png'))
+    const images = await Promise.all(files.map(async (f) => ({ f, buf: await readFile(OUT + f) })))
+    const totalBytes = sum(images.map((i) => i.buf.length)) * reps
+    const n = images.length * reps
+
+    // --- 1. baseline: blur only ---
+    await blurOnly(images[0].buf)
+    const blat: number[] = []
+    const bt0 = performance.now()
+    for (let r = 0; r < reps; r++) {
+        for (const img of images) {
+            const t = performance.now()
+            await blurOnly(img.buf)
+            blat.push(performance.now() - t)
+        }
+    }
+    const bwall = (performance.now() - bt0) / 1000
+    const blurMean = sum(blat) / blat.length
+    const blurThroughput = blat.length / bwall
+
+    // --- 2 + 3. advanced ---
+
+    const tLoad = performance.now()
+    const models = await loadModels()
+
+    const db = await runAdvanced(images, models, 'dbnet', totalBytes)
+    reportAdvanced('ADVANCED + DBNET text (native ONNX detection), single image at a time', db, 0, n)
+
+    // --- concurrency sweep: how much overlaps when we process images in parallel? ---
+    // sharp + ORT(dbnet) run async on libuv; tfjs-node (nsfw/face) runs SYNC and blocks the JS
+    // thread, so it can't overlap in-process. This sweep shows the ceiling of in-process async.
+
+    let best = db.throughput
+    for (const c of [1, 2, 4, 8].filter((c) => c <= cores * 2)) {
+        const tp = await throughputAt(images, models, c)
+        best = Math.max(best, tp)
+    }
+
+    await disposeModels(models)
+
+    // --- headline ---
+    const dbScrub = db.mean - avgOf(db, 'decodeMs') - avgOf(db, 'encodeMs')
+}
+
+async function throughputAt(images: Img[], models: Models, c: number): Promise<number> {
+    const tasks: Buffer[] = []
+    for (let r = 0; r < reps; r++) {
+        for (const img of images) {
+            tasks.push(img.buf)
+        }
+    }
+    let idx = 0
+    const worker = async (): Promise<void> => {
+        for (;;) {
+            const i = idx++
+            if (i >= tasks.length) {
+                return
+            }
+            await advancedScrub(tasks[i], models, 'dbnet')
+        }
+    }
+    const t0 = performance.now()
+    await Promise.all(Array.from({ length: c }, () => worker()))
+    return tasks.length / ((performance.now() - t0) / 1000)
+}
+
+function avgOf(r: Result, k: keyof StageTimings): number {
+    return sum(r.stages.map((s) => s[k] as number)) / r.stages.length
+}
+
+main().catch((e) => {
+    console.error(e)
+    process.exit(1)
+})
