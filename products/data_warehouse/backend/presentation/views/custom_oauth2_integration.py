@@ -140,7 +140,7 @@ class CustomOAuth2IntegrationSerializer(serializers.ModelSerializer):
     has_refresh_token = serializers.SerializerMethodField(
         help_text="Whether a refresh token is stored (the secret itself is never returned)."
     )
-    errors = serializers.CharField(
+    errors = serializers.CharField(  # type: ignore[assignment]  # field name shadows BaseSerializer.errors; DRF moves it off the class
         read_only=True,
         help_text="Non-empty (TOKEN_REFRESH_FAILED) while the stored token is failing to refresh; cleared on "
         "a successful reconnect or sync.",
@@ -318,6 +318,7 @@ class CustomOAuth2IntegrationViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewS
         # A PATCH can also rebind the integration onto a different source, so require editor access to both
         # the current source and the requested one — otherwise an editor of one source could reserve the
         # integration against a restricted source they can't edit.
+        assert serializer.instance is not None  # perform_update always has a bound instance
         current_source = serializer.instance.external_data_source
         requested_source = serializer.validated_data.get("external_data_source", current_source)
         self._assert_can_edit_source(current_source)
