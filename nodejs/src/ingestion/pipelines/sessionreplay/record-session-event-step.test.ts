@@ -3,7 +3,6 @@ import { DateTime } from 'luxon'
 import { PipelineResultType } from '~/ingestion/framework/results'
 import { ParsedMessageData } from '~/ingestion/pipelines/sessionreplay/kafka/types'
 import { SessionRecordingIngesterMetrics } from '~/ingestion/pipelines/sessionreplay/metrics'
-import { SessionBatchManager } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-manager'
 import { SessionBatchRecorder } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 
@@ -17,7 +16,6 @@ jest.mock('~/ingestion/pipelines/sessionreplay/metrics', () => ({
 }))
 
 describe('createRecordSessionEventStep', () => {
-    let mockSessionBatchManager: jest.Mocked<SessionBatchManager>
     let mockBatchRecorder: jest.Mocked<SessionBatchRecorder>
 
     const defaultTeam: TeamForReplay = {
@@ -51,7 +49,10 @@ describe('createRecordSessionEventStep', () => {
     ): RecordSessionEventStepInput => ({
         team,
         parsedMessage: createParsedMessage(overrides),
+        sessionBatchRecorder: mockBatchRecorder,
     })
+
+    const step = () => createRecordSessionEventStep({ isDebugLoggingEnabled: () => false })
 
     beforeEach(() => {
         jest.clearAllMocks()
@@ -59,22 +60,12 @@ describe('createRecordSessionEventStep', () => {
         mockBatchRecorder = {
             record: jest.fn().mockResolvedValue(100),
         } as unknown as jest.Mocked<SessionBatchRecorder>
-
-        mockSessionBatchManager = {
-            getCurrentBatch: jest.fn().mockReturnValue(mockBatchRecorder),
-        } as unknown as jest.Mocked<SessionBatchManager>
     })
 
-    it('should record message to session batch', async () => {
-        const step = createRecordSessionEventStep({
-            sessionBatchManager: mockSessionBatchManager,
-            isDebugLoggingEnabled: () => false,
-        })
-
+    it('should record message to the batch recorder carried on the input', async () => {
         const input = createInput()
-        await step(input)
+        await step()(input)
 
-        expect(mockSessionBatchManager.getCurrentBatch).toHaveBeenCalledTimes(1)
         expect(mockBatchRecorder.record).toHaveBeenCalledTimes(1)
         expect(mockBatchRecorder.record).toHaveBeenCalledWith({
             team: defaultTeam,
@@ -83,13 +74,8 @@ describe('createRecordSessionEventStep', () => {
     })
 
     it('should return ok result with input preserved', async () => {
-        const step = createRecordSessionEventStep({
-            sessionBatchManager: mockSessionBatchManager,
-            isDebugLoggingEnabled: () => false,
-        })
-
         const input = createInput()
-        const result = await step(input)
+        const result = await step()(input)
 
         expect(result.type).toBe(PipelineResultType.OK)
         if (result.type === PipelineResultType.OK) {
@@ -100,41 +86,25 @@ describe('createRecordSessionEventStep', () => {
     })
 
     it('should reset sessions revoked metric', async () => {
-        const step = createRecordSessionEventStep({
-            sessionBatchManager: mockSessionBatchManager,
-            isDebugLoggingEnabled: () => false,
-        })
-
-        await step(createInput())
+        await step()(createInput())
 
         expect(SessionRecordingIngesterMetrics.resetSessionsRevoked).toHaveBeenCalledTimes(1)
     })
 
     it('should observe session info metric', async () => {
-        const step = createRecordSessionEventStep({
-            sessionBatchManager: mockSessionBatchManager,
-            isDebugLoggingEnabled: () => false,
-        })
-
         const input = createInput({ metadata: { partition: 0, topic: 'test', offset: 1, timestamp: 0, rawSize: 250 } })
-        await step(input)
+        await step()(input)
 
         expect(SessionRecordingIngesterMetrics.observeSessionInfo).toHaveBeenCalledWith(250)
     })
 
     it('should preserve additional input properties', async () => {
-        const step = createRecordSessionEventStep({
-            sessionBatchManager: mockSessionBatchManager,
-            isDebugLoggingEnabled: () => false,
-        })
-
-        // Input with extra properties
         const input = {
             ...createInput(),
             extraProperty: 'should be preserved',
         }
 
-        const result = await step(input)
+        const result = await step()(input)
 
         expect(result.type).toBe(PipelineResultType.OK)
         if (result.type === PipelineResultType.OK) {

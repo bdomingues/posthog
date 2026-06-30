@@ -3,10 +3,10 @@ import { Message } from 'node-rdkafka'
 
 import { OverflowOutput } from '~/common/outputs'
 import { createApplyEventRestrictionsStep, createParseHeadersStep } from '~/ingestion/common/steps/event-preprocessing'
-import { BatchPipelineUnwrapper } from '~/ingestion/framework/batch-pipeline-unwrapper'
+import { AccumulationContext } from '~/ingestion/framework/accumulating-pipeline'
+import { BatchPipeline } from '~/ingestion/framework/batch-pipeline.interface'
 import { newBatchPipelineBuilder } from '~/ingestion/framework/builders'
 import { createTopHogWrapper, sum, timer } from '~/ingestion/framework/extensions/tophog'
-import { createUnwrapper } from '~/ingestion/framework/helpers'
 import { PipelineConfig } from '~/ingestion/framework/result-handling-pipeline'
 import {
     SessionReplayPipelineConfig,
@@ -18,6 +18,7 @@ import { createAnonymizeStep } from '~/ingestion/pipelines/sessionreplay/anonymi
 import { ScrubContext } from '~/ingestion/pipelines/sessionreplay/anonymize/config'
 import { createParseMessageStep } from '~/ingestion/pipelines/sessionreplay/parse-message-step'
 import { createRecordSessionEventStep } from '~/ingestion/pipelines/sessionreplay/record-session-event-step'
+import { SessionBatchContext } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-factory'
 import { createTeamFilterStep } from '~/ingestion/pipelines/sessionreplay/team-filter-step'
 
 export type MlMirrorReplayPipelineConfig = SessionReplayPipelineConfig & {
@@ -27,9 +28,10 @@ export type MlMirrorReplayPipelineConfig = SessionReplayPipelineConfig & {
 
 export function createMlMirrorReplayPipeline(
     config: MlMirrorReplayPipelineConfig
-): BatchPipelineUnwrapper<
-    SessionReplayPipelineInput,
+): BatchPipeline<
+    SessionReplayPipelineInput & SessionBatchContext & AccumulationContext,
     SessionReplayPipelineOutput,
+    { message: Message },
     { message: Message },
     OverflowOutput
 > {
@@ -40,7 +42,6 @@ export function createMlMirrorReplayPipeline(
         promiseScheduler,
         teamService,
         topHog,
-        sessionBatchManager,
         isDebugLoggingEnabled,
         scrubContext,
     } = config
@@ -48,7 +49,10 @@ export function createMlMirrorReplayPipeline(
     const pipelineConfig: PipelineConfig<OverflowOutput> = { outputs, promiseScheduler }
     const topHogWrapper = createTopHogWrapper(topHog)
 
-    const pipeline = newBatchPipelineBuilder<SessionReplayPipelineInput, { message: Message }>()
+    const pipeline = newBatchPipelineBuilder<
+        SessionReplayPipelineInput & SessionBatchContext & AccumulationContext,
+        { message: Message }
+    >()
         .messageAware((b) =>
             b
                 .sequentially((b) =>
@@ -91,7 +95,6 @@ export function createMlMirrorReplayPipeline(
                                             .pipe(
                                                 topHogWrapper(
                                                     createRecordSessionEventStep({
-                                                        sessionBatchManager,
                                                         isDebugLoggingEnabled,
                                                     }),
                                                     [
@@ -121,5 +124,5 @@ export function createMlMirrorReplayPipeline(
         .gather()
         .build()
 
-    return createUnwrapper(pipeline)
+    return pipeline
 }

@@ -8,31 +8,24 @@ import { parseJSON } from '~/common/utils/json-parse'
 import { PromiseScheduler } from '~/common/utils/promise-scheduler'
 import { createApplyEventRestrictionsStep, createParseHeadersStep } from '~/ingestion/common/steps/event-preprocessing'
 import { TopHogRegistry } from '~/ingestion/framework/extensions/tophog'
-import { drop, ok, redirect } from '~/ingestion/framework/results'
-import { SessionBatchManager } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-manager'
+import { createOkContext } from '~/ingestion/framework/helpers'
+import { drop, isOkResult, ok, redirect } from '~/ingestion/framework/results'
 import { SessionBatchRecorder } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { createMockIngestionOutputs } from '~/tests/helpers/mock-ingestion-outputs'
 
-import { createSessionReplayPipeline, runSessionReplayPipeline } from './session-replay-pipeline'
+import { SessionReplayPipelineOutput, createSessionReplayPipeline } from './session-replay-pipeline'
 
 jest.mock('~/ingestion/common/steps/event-preprocessing', () => ({
     createParseHeadersStep: jest.fn(),
     createApplyEventRestrictionsStep: jest.fn(),
 }))
 
-function createMockSessionBatchManager(): jest.Mocked<SessionBatchManager> {
-    const mockBatchRecorder = {
+function createMockBatchRecorder(): jest.Mocked<SessionBatchRecorder> {
+    return {
         record: jest.fn().mockResolvedValue(undefined),
     } as unknown as jest.Mocked<SessionBatchRecorder>
-
-    return {
-        getCurrentBatch: jest.fn().mockReturnValue(mockBatchRecorder),
-        shouldFlush: jest.fn().mockReturnValue(false),
-        flush: jest.fn().mockResolvedValue(undefined),
-        discardPartitions: jest.fn(),
-    } as unknown as jest.Mocked<SessionBatchManager>
 }
 
 const mockCreateParseHeadersStep = createParseHeadersStep as jest.Mock
@@ -78,7 +71,7 @@ function createMockTopHog(): MockTopHogRegistry {
 describe('session-replay-pipeline', () => {
     let mockRestrictionManager: EventIngestionRestrictionManager
     let mockTeamService: TeamService
-    let mockSessionBatchManager: jest.Mocked<SessionBatchManager>
+    let mockBatchRecorder: jest.Mocked<SessionBatchRecorder>
     let promiseScheduler: PromiseScheduler
     let topHog: MockTopHogRegistry
     let outputs: jest.Mocked<
@@ -135,6 +128,30 @@ describe('session-replay-pipeline', () => {
         return JSON.stringify(rawMessage)
     }
 
+    // Feeds messages through the record pipeline with the batch recorder tagged on each element
+    // (as the accumulating pipeline does), drains it, and returns the unwrapped OK outputs.
+    async function runPipeline(
+        pipeline: ReturnType<typeof createSessionReplayPipeline>,
+        messages: Message[]
+    ): Promise<SessionReplayPipelineOutput[]> {
+        pipeline.feed(
+            messages.map((message) =>
+                createOkContext({ message, sessionBatchRecorder: mockBatchRecorder, batchId: 0 }, { message })
+            )
+        )
+        const results: SessionReplayPipelineOutput[] = []
+        let batch = await pipeline.next()
+        while (batch !== null) {
+            for (const element of batch) {
+                if (isOkResult(element.result)) {
+                    results.push(element.result.value)
+                }
+            }
+            batch = await pipeline.next()
+        }
+        return results
+    }
+
     beforeEach(() => {
         jest.clearAllMocks()
 
@@ -151,7 +168,7 @@ describe('session-replay-pipeline', () => {
             getRetentionPeriodByTeamId: jest.fn().mockResolvedValue(30),
         } as unknown as TeamService
 
-        mockSessionBatchManager = createMockSessionBatchManager()
+        mockBatchRecorder = createMockBatchRecorder()
         topHog = createMockTopHog()
 
         promiseScheduler = new PromiseScheduler()
@@ -235,7 +252,7 @@ describe('session-replay-pipeline', () => {
         }
     }
 
-    describe('runSessionReplayPipeline', () => {
+    describe('createSessionReplayPipeline', () => {
         it('passes through messages when no restrictions apply', async () => {
             const pipeline = createSessionReplayPipeline({
                 outputs,
@@ -244,13 +261,12 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             const messages = [createMessage(0, 1, 'session-1'), createMessage(0, 2, 'session-2')]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             expect(result).toHaveLength(2)
             expect(result[0].parsedMessage.session_id).toBe('session-1')
@@ -276,7 +292,6 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
@@ -286,7 +301,7 @@ describe('session-replay-pipeline', () => {
                 createMessage(0, 3, 'session-3'),
             ]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             expect(result).toHaveLength(2)
             expect(result[0].parsedMessage.session_id).toBe('session-1')
@@ -301,7 +316,6 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
@@ -319,7 +333,7 @@ describe('session-replay-pipeline', () => {
 
             const messages = [createMessage(0, 1, 'session-1'), invalidMessage, createMessage(0, 3, 'session-3')]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             expect(result).toHaveLength(2)
             expect(result[0].parsedMessage.session_id).toBe('session-1')
@@ -334,7 +348,6 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
@@ -352,7 +365,7 @@ describe('session-replay-pipeline', () => {
 
             const messages = [invalidMessage]
 
-            await runSessionReplayPipeline(pipeline, messages)
+            await runPipeline(pipeline, messages)
 
             // Wait for side effects to complete
             await promiseScheduler.waitForAll()
@@ -383,7 +396,6 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
@@ -393,7 +405,7 @@ describe('session-replay-pipeline', () => {
                 createMessage(0, 3, 'session-3'),
             ]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             // Wait for side effects to complete
             await promiseScheduler.waitForAll()
@@ -414,11 +426,10 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
-            const result = await runSessionReplayPipeline(pipeline, [])
+            const result = await runPipeline(pipeline, [])
 
             expect(result).toHaveLength(0)
         })
@@ -441,7 +452,6 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
@@ -451,7 +461,7 @@ describe('session-replay-pipeline', () => {
                 messages.push(createMessage(0, i))
             }
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             // 100 messages should be dropped (10, 20, 30, ..., 1000)
             // 900 messages should pass through
@@ -485,7 +495,6 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
@@ -494,7 +503,7 @@ describe('session-replay-pipeline', () => {
                 createMessage(0, 2, 'session-2', { token: 'team-token-789' }),
             ]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             expect(result).toHaveLength(2)
             // Verify headers were correctly parsed and passed through
@@ -515,7 +524,6 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
@@ -525,7 +533,7 @@ describe('session-replay-pipeline', () => {
                 messages.push(createMessage(0, i))
             }
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             expect(result).toHaveLength(500)
 
@@ -553,7 +561,6 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: teamServiceThatDropsSecond,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
@@ -563,7 +570,7 @@ describe('session-replay-pipeline', () => {
                 createMessage(0, 3, 'session-3', { token: 'valid-token' }),
             ]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             expect(result).toHaveLength(2)
             expect(result[0].parsedMessage.session_id).toBe('session-1')
@@ -578,14 +585,13 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             // Explicitly pass empty headers (no token)
             const messages = [createMessage(0, 1, 'session-1', {})]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             // Message should be dropped by team filter due to missing token
             expect(result).toHaveLength(0)
@@ -599,13 +605,12 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             const messages = [createMessage(0, 1, 'session-1', { token: 'test-token', lib_version: '1.74.0' })]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             expect(result).toHaveLength(1)
             expect(outputs.queueMessages).toHaveBeenCalledTimes(1)
@@ -636,13 +641,12 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             const messages = [createMessage(0, 1, 'session-1', { token: 'test-token', lib_version: '1.75.0' })]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             expect(result).toHaveLength(1)
             expect(outputs.queueMessages).not.toHaveBeenCalled()
@@ -656,13 +660,12 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             const messages = [createMessage(0, 1, 'session-1', { token: 'test-token' })]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             expect(result).toHaveLength(1)
             expect(outputs.queueMessages).not.toHaveBeenCalled()
@@ -676,14 +679,13 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             // Create a message with timestamps 10 days old (threshold is 7 days)
             const messages = [createMessageWithOldTimestamps(0, 1, 'session-1', 10, { token: 'test-token' })]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             // Message should be dropped but warning should be sent
             expect(result).toHaveLength(0)
@@ -711,16 +713,14 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             const messages = [createMessage(0, 1, 'session-1')]
 
-            await runSessionReplayPipeline(pipeline, messages)
+            await runPipeline(pipeline, messages)
 
-            expect(mockSessionBatchManager.getCurrentBatch).toHaveBeenCalled()
-            const mockBatch = mockSessionBatchManager.getCurrentBatch()
+            const mockBatch = mockBatchRecorder
             expect(mockBatch.record).toHaveBeenCalledTimes(1)
             expect(mockBatch.record).toHaveBeenCalledWith(
                 expect.objectContaining({
@@ -740,7 +740,6 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
@@ -750,9 +749,9 @@ describe('session-replay-pipeline', () => {
                 createMessage(0, 3, 'session-3'),
             ]
 
-            await runSessionReplayPipeline(pipeline, messages)
+            await runPipeline(pipeline, messages)
 
-            const mockBatch = mockSessionBatchManager.getCurrentBatch()
+            const mockBatch = mockBatchRecorder
             expect(mockBatch.record).toHaveBeenCalledTimes(3)
         })
 
@@ -767,16 +766,15 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             const messages = [createMessage(0, 1, 'session-1')]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             expect(result).toHaveLength(0)
-            const mockBatch = mockSessionBatchManager.getCurrentBatch()
+            const mockBatch = mockBatchRecorder
             expect(mockBatch.record).not.toHaveBeenCalled()
         })
 
@@ -792,16 +790,15 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: teamServiceThatReturnsNull,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             const messages = [createMessage(0, 1, 'session-1', { token: 'invalid-token' })]
 
-            const result = await runSessionReplayPipeline(pipeline, messages)
+            const result = await runPipeline(pipeline, messages)
 
             expect(result).toHaveLength(0)
-            const mockBatch = mockSessionBatchManager.getCurrentBatch()
+            const mockBatch = mockBatchRecorder
             expect(mockBatch.record).not.toHaveBeenCalled()
         })
 
@@ -813,13 +810,12 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             const messages = [createMessage(0, 1, 'session-1', { token: 'test-token' })]
 
-            await runSessionReplayPipeline(pipeline, messages)
+            await runPipeline(pipeline, messages)
 
             // Verify parse time metric was registered and recorded
             const parseTimeRecorder = topHog.sumRecorders.get('parse_time_ms_by_session_id')
@@ -839,13 +835,12 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             const messages = [createMessage(0, 1, 'session-1', { token: 'test-token' })]
 
-            await runSessionReplayPipeline(pipeline, messages)
+            await runPipeline(pipeline, messages)
 
             // Verify message size metric was registered and recorded
             const messageSizeRecorder = topHog.sumRecorders.get('message_size_by_session_id')
@@ -865,13 +860,12 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             const messages = [createMessage(0, 1, 'session-1', { token: 'test-token' })]
 
-            await runSessionReplayPipeline(pipeline, messages)
+            await runPipeline(pipeline, messages)
 
             // Verify consume time metric was registered and recorded
             const consumeTimeRecorder = topHog.sumRecorders.get('consume_time_ms_by_session_id')
@@ -891,7 +885,6 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
@@ -901,7 +894,7 @@ describe('session-replay-pipeline', () => {
                 createMessage(0, 3, 'session-3', { token: 'token-1' }),
             ]
 
-            await runSessionReplayPipeline(pipeline, messages)
+            await runPipeline(pipeline, messages)
 
             // Verify all three messages were recorded for each metric
             const parseTimeRecorder = topHog.sumRecorders.get('parse_time_ms_by_session_id')
@@ -938,13 +931,12 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
             const messages = [createMessage(0, 1, 'session-1')]
 
-            await runSessionReplayPipeline(pipeline, messages)
+            await runPipeline(pipeline, messages)
 
             // Metrics should not be recorded for dropped messages since they never reach the steps
             const parseTimeRecorder = topHog.sumRecorders.get('parse_time_ms_by_session_id')
@@ -979,7 +971,6 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 topHog,
-                sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
             })
 
@@ -996,7 +987,7 @@ describe('session-replay-pipeline', () => {
                 size: 100,
             }
 
-            await runSessionReplayPipeline(pipeline, [messageWithoutToken])
+            await runPipeline(pipeline, [messageWithoutToken])
 
             // The parsed message should have token from Kafka headers
             const messageSizeRecorder = topHog.sumRecorders.get('message_size_by_session_id')

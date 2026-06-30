@@ -14,15 +14,14 @@ import { logger } from '~/common/utils/logger'
 import { captureException } from '~/common/utils/posthog'
 import { PromiseScheduler } from '~/common/utils/promise-scheduler'
 import { IngestionConsumerConfig } from '~/ingestion/config'
-import { BatchPipelineUnwrapper } from '~/ingestion/framework/batch-pipeline-unwrapper'
+import { createOkContext } from '~/ingestion/framework/helpers'
 import { TopHog } from '~/ingestion/framework/tophog/tophog'
+import { SessionReplayPipelineConfig, createSessionReplayPipeline } from '~/ingestion/pipelines/sessionreplay'
 import {
-    SessionReplayPipelineConfig,
-    SessionReplayPipelineInput,
-    SessionReplayPipelineOutput,
-    createSessionReplayPipeline,
-    runSessionReplayPipeline,
-} from '~/ingestion/pipelines/sessionreplay'
+    SessionReplayAccumulatingPipeline,
+    SessionReplayRecordPipeline,
+    createSessionReplayAccumulatingPipeline,
+} from '~/ingestion/pipelines/sessionreplay/session-replay-accumulating-pipeline'
 import { getBlockEncryptor } from '~/ingestion/pipelines/sessionreplay/shared/crypto'
 import { SessionFeatureStore } from '~/ingestion/pipelines/sessionreplay/shared/features/session-feature-store'
 import { getKeyStore } from '~/ingestion/pipelines/sessionreplay/shared/keystore'
@@ -43,8 +42,8 @@ import { KafkaOffsetManager } from './kafka/offset-manager'
 import { SessionRecordingIngesterMetrics } from './metrics'
 import { BlackholeSessionBatchFileStorage } from './sessions/blackhole-session-batch-writer'
 import { RetentionAwareStorage } from './sessions/retention-aware-batch-writer'
+import { SessionBatchFactory } from './sessions/session-batch-factory'
 import { SessionBatchFileStorage } from './sessions/session-batch-file-storage'
-import { SessionBatchManager } from './sessions/session-batch-manager'
 import { SessionConsoleLogStore } from './sessions/session-console-log-store'
 import { SessionFilter } from './sessions/session-filter'
 import { SessionTracker } from './sessions/session-tracker'
@@ -63,15 +62,8 @@ export type SessionRecordingIngesterConfig = SessionRecordingConfig &
         'INGESTION_PIPELINE' | 'INGESTION_LANE'
     >
 
-/** Builds the session replay pipeline for a deployment (default or ML mirror). */
-export type SessionReplayPipelineFactory = (
-    config: SessionReplayPipelineConfig
-) => BatchPipelineUnwrapper<
-    SessionReplayPipelineInput,
-    SessionReplayPipelineOutput,
-    { message: Message },
-    OverflowOutput
->
+/** Builds the session replay record pipeline for a deployment (default or ML mirror). */
+export type SessionReplayPipelineFactory = (config: SessionReplayPipelineConfig) => SessionReplayRecordPipeline
 
 /** Collaborators a deployment can inject to vary ingester behavior; anything omitted uses the primary default. */
 export interface SessionRecordingIngesterCollaborators {
@@ -93,7 +85,8 @@ export class SessionRecordingIngester {
 
     private isDebugLoggingEnabled: ValueMatcher<number>
     private readonly promiseScheduler: PromiseScheduler
-    private readonly sessionBatchManager: SessionBatchManager
+    private readonly sessionBatchFactory: SessionBatchFactory
+    private readonly offsetManager: KafkaOffsetManager
     private readonly redisPool: RedisPool
     private readonly restrictionRedisPool: RedisPool
     private readonly teamService: TeamService
@@ -101,12 +94,10 @@ export class SessionRecordingIngester {
     private readonly eventIngestionRestrictionManagerComponent: EventIngestionRestrictionManagerComponent
     private eventIngestionRestrictionManager!: EventIngestionRestrictionManager
     private stopEventIngestionRestrictionManager?: () => Promise<void>
-    private sessionReplayPipeline!: BatchPipelineUnwrapper<
-        SessionReplayPipelineInput,
-        SessionReplayPipelineOutput,
-        { message: Message },
-        OverflowOutput
-    >
+    private recordPipeline!: SessionReplayRecordPipeline
+    private accumulatingPipeline!: SessionReplayAccumulatingPipeline
+    private readonly maxBatchSizeBytes: number
+    private readonly maxBatchAgeMs: number
     private readonly outputs: IngestionOutputs<
         | IngestionWarningsOutput
         | DlqOutput
@@ -173,7 +164,9 @@ export class SessionRecordingIngester {
 
         const retentionService = new RetentionService(this.redisPool, this.teamService)
 
-        const offsetManager = new KafkaOffsetManager(this.commitOffsets.bind(this), this.topic)
+        this.offsetManager = new KafkaOffsetManager(this.commitOffsets.bind(this), this.topic)
+        this.maxBatchSizeBytes = this.config.SESSION_RECORDING_MAX_BATCH_SIZE_KB * 1024
+        this.maxBatchAgeMs = this.config.SESSION_RECORDING_MAX_BATCH_AGE_MS
         this.createPipeline = collaborators.createPipeline ?? createSessionReplayPipeline
         const metadataStore = collaborators.metadataStore ?? new SessionMetadataStore(outputs)
         const consoleLogStore =
@@ -220,12 +213,10 @@ export class SessionRecordingIngester {
             )
         this.encryptor = collaborators.encryptor ?? getBlockEncryptor(this.keyStore)
 
-        this.sessionBatchManager = new SessionBatchManager({
-            maxBatchSizeBytes: this.config.SESSION_RECORDING_MAX_BATCH_SIZE_KB * 1024,
-            maxBatchAgeMs: this.config.SESSION_RECORDING_MAX_BATCH_AGE_MS,
+        this.sessionBatchFactory = new SessionBatchFactory({
             maxEventsPerSessionPerBatch: this.config.SESSION_RECORDING_V2_MAX_EVENTS_PER_SESSION_PER_BATCH,
             featuresRolloutPercentage: this.config.SESSION_RECORDING_FEATURES_ROLLOUT_PERCENTAGE,
-            offsetManager,
+            offsetManager: this.offsetManager,
             fileStorage: this.fileStorage,
             metadataStore,
             consoleLogStore,
@@ -275,17 +266,27 @@ export class SessionRecordingIngester {
         SessionRecordingIngesterMetrics.observeKafkaBatchSize(batchSize)
         SessionRecordingIngesterMetrics.observeKafkaBatchSizeKb(batchSizeKb)
 
-        // Run messages through the pipeline (handles restrictions, parsing, team filtering, and recording)
-        await instrumentFn(`recordingingesterv2.handleEachBatch.runPipeline`, async () =>
-            runSessionReplayPipeline(this.sessionReplayPipeline, messages)
-        )
+        // Feed messages into the accumulating pipeline (records into the current batch) and drain it.
+        // The pipeline decides when to flush (size or age); the consumer commits offsets on each flush.
+        await instrumentFn(`recordingingesterv2.handleEachBatch.runPipeline`, async () => {
+            await this.accumulatingPipeline.feed(messages.map((message) => createOkContext({ message }, { message })))
+            await this.drainAccumulatingPipeline()
+        })
 
         this.kafkaConsumer.heartbeat()
+    }
 
-        if (this.sessionBatchManager.shouldFlush()) {
-            await instrumentFn(`recordingingesterv2.handleEachBatch.flush`, async () =>
-                this.sessionBatchManager.flush()
-            )
+    /**
+     * Drains the accumulating pipeline to completion, committing offsets after each flush. A flushed
+     * result means the batch is durably in storage, so the offsets it covers are safe to commit.
+     */
+    private async drainAccumulatingPipeline(): Promise<void> {
+        let result = await this.accumulatingPipeline.next()
+        while (result !== null) {
+            if (result.flushed) {
+                await instrumentFn(`recordingingesterv2.handleEachBatch.flush`, async () => this.offsetManager.commit())
+            }
+            result = await this.accumulatingPipeline.next()
         }
     }
 
@@ -301,16 +302,23 @@ export class SessionRecordingIngester {
         this.eventIngestionRestrictionManager = started.value
         this.stopEventIngestionRestrictionManager = started.stop
 
-        this.sessionReplayPipeline = this.createPipeline({
+        this.recordPipeline = this.createPipeline({
             outputs: this.outputs,
             eventIngestionRestrictionManager: this.eventIngestionRestrictionManager,
             overflowEnabled: this.overflowEnabled(),
             promiseScheduler: this.promiseScheduler,
             teamService: this.teamService,
             topHog: this.topHog,
-            sessionBatchManager: this.sessionBatchManager,
             isDebugLoggingEnabled: this.isDebugLoggingEnabled,
         })
+
+        this.accumulatingPipeline = createSessionReplayAccumulatingPipeline({
+            recordPipeline: this.recordPipeline,
+            sessionBatchFactory: this.sessionBatchFactory,
+            maxBatchSizeBytes: this.maxBatchSizeBytes,
+            maxBatchAgeMs: this.maxBatchAgeMs,
+        })
+        this.accumulatingPipeline.start()
 
         // Check that the storage backend is healthy before starting the consumer
         // This is especially important in local dev with minio
@@ -360,10 +368,13 @@ export class SessionRecordingIngester {
         // Stop TopHog and flush final metrics
         await this.topHog.stop()
 
-        const assignedPartitions = this.assignedTopicPartitions
         await this.kafkaConsumer.disconnect()
 
-        void this.promiseScheduler.schedule(this.onRevokePartitions(assignedPartitions))
+        // Final flush: stop the age timer and persist the last partial batch, then commit its offsets.
+        const flushed = await this.accumulatingPipeline.stop()
+        if (flushed?.flushed) {
+            await this.offsetManager.commit()
+        }
 
         const promiseResults = await this.promiseScheduler.waitForAllSettled()
 
@@ -390,20 +401,24 @@ export class SessionRecordingIngester {
         return this.assignedTopicPartitions.map((x) => x.partition)
     }
 
-    private onRevokePartitions(topicPartitions: TopicPartition[]): Promise<void> {
+    private async onRevokePartitions(topicPartitions: TopicPartition[]): Promise<void> {
         /**
-         * The revoke_partitions indicates that the consumer group has had partitions revoked.
-         * As a result, we need to drop all sessions currently managed for the revoked partitions
+         * The revoke_partitions event indicates that the consumer group has had partitions revoked.
+         * Rather than reaching into the live batch to discard the revoked partition's sessions, we
+         * process whatever is buffered and flush it, committing offsets — so the new owner resumes
+         * from after the work we already persisted.
          */
 
         const revokedPartitions = topicPartitions.map((x) => x.partition)
         if (!revokedPartitions.length) {
-            return Promise.resolve()
+            return
         }
 
         SessionRecordingIngesterMetrics.resetSessionsHandled()
-        this.sessionBatchManager.discardPartitions(revokedPartitions)
-        return Promise.resolve()
+        const flushed = await this.accumulatingPipeline.flush()
+        if (flushed?.flushed) {
+            await this.offsetManager.commit()
+        }
     }
 
     private async commitOffsets(offsets: TopicPartitionOffset[]): Promise<void> {

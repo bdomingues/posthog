@@ -7,10 +7,9 @@ import { EventIngestionRestrictionManager } from '~/common/utils/event-ingestion
 import { PromiseScheduler } from '~/common/utils/promise-scheduler'
 import { createApplyEventRestrictionsStep, createParseHeadersStep } from '~/ingestion/common/steps/event-preprocessing'
 import { TopHogRegistry } from '~/ingestion/framework/extensions/tophog'
+import { createOkContext } from '~/ingestion/framework/helpers'
 import { ok } from '~/ingestion/framework/results'
-import { runSessionReplayPipeline } from '~/ingestion/pipelines/sessionreplay'
 import { defaultAllowLists } from '~/ingestion/pipelines/sessionreplay/anonymize/default-dict'
-import { SessionBatchManager } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-manager'
 import { SessionBatchRecorder } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
@@ -37,7 +36,7 @@ function createMockTopHog(): TopHogRegistry {
 
 describe('ml-mirror-pipeline', () => {
     let recordMock: jest.Mock
-    let mockSessionBatchManager: jest.Mocked<SessionBatchManager>
+    let recorder: jest.Mocked<SessionBatchRecorder>
     let mockTeamService: TeamService
     let topHog: TopHogRegistry
     let promiseScheduler: PromiseScheduler
@@ -58,13 +57,7 @@ describe('ml-mirror-pipeline', () => {
         outputs = createMockIngestionOutputs()
 
         recordMock = jest.fn().mockResolvedValue(undefined)
-        const recorder = { record: recordMock } as unknown as jest.Mocked<SessionBatchRecorder>
-        mockSessionBatchManager = {
-            getCurrentBatch: jest.fn().mockReturnValue(recorder),
-            shouldFlush: jest.fn().mockReturnValue(false),
-            flush: jest.fn().mockResolvedValue(undefined),
-            discardPartitions: jest.fn(),
-        } as unknown as jest.Mocked<SessionBatchManager>
+        recorder = { record: recordMock } as unknown as jest.Mocked<SessionBatchRecorder>
 
         topHog = createMockTopHog()
         promiseScheduler = new PromiseScheduler()
@@ -89,10 +82,25 @@ describe('ml-mirror-pipeline', () => {
             promiseScheduler,
             teamService: mockTeamService,
             topHog,
-            sessionBatchManager: mockSessionBatchManager,
             isDebugLoggingEnabled: () => false,
             scrubContext,
         })
+    }
+
+    // Feeds messages through the record pipeline with the batch recorder tagged on each element
+    // (as the accumulating pipeline does), then drains it.
+    async function runPipeline(
+        pipeline: ReturnType<typeof createMlMirrorReplayPipeline>,
+        messages: Message[]
+    ): Promise<void> {
+        pipeline.feed(
+            messages.map((message) =>
+                createOkContext({ message, sessionBatchRecorder: recorder, batchId: 0 }, { message })
+            )
+        )
+        while ((await pipeline.next()) !== null) {
+            // drain
+        }
     }
 
     function message(sessionId: string): Message {
@@ -174,7 +182,7 @@ describe('ml-mirror-pipeline', () => {
             getRetentionPeriodByTeamId: jest.fn().mockResolvedValue(30),
         } as unknown as TeamService
 
-        await runSessionReplayPipeline(buildPipeline(), [message('sess-1')])
+        await runPipeline(buildPipeline(), [message('sess-1')])
 
         expect(recordMock).toHaveBeenCalledTimes(1)
         const recorded = recordMock.mock.calls[0][0]
@@ -188,7 +196,7 @@ describe('ml-mirror-pipeline', () => {
             getRetentionPeriodByTeamId: jest.fn().mockResolvedValue(30),
         } as unknown as TeamService
 
-        await runSessionReplayPipeline(buildPipeline(), [message('sess-2')])
+        await runPipeline(buildPipeline(), [message('sess-2')])
 
         expect(recordMock).not.toHaveBeenCalled()
     })
@@ -199,7 +207,7 @@ describe('ml-mirror-pipeline', () => {
             getRetentionPeriodByTeamId: jest.fn().mockResolvedValue(30),
         } as unknown as TeamService
 
-        await runSessionReplayPipeline(buildPipeline(), [fullSnapshotMessage('sess-3')])
+        await runPipeline(buildPipeline(), [fullSnapshotMessage('sess-3')])
 
         expect(recordMock).toHaveBeenCalledTimes(1)
         const node = recordMock.mock.calls[0][0].message.eventsByWindowId['window-1'][0].data.node.childNodes[0]

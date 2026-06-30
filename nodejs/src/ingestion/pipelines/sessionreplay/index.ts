@@ -1,6 +1,5 @@
 export {
     createSessionReplayPipeline,
-    runSessionReplayPipeline,
     type SessionReplayPipelineConfig,
     type SessionReplayPipelineInput,
     type SessionReplayPipelineOutput,

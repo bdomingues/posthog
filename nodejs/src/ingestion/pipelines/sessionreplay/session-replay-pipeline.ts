@@ -5,13 +5,13 @@ import { IngestionOutputs } from '~/common/outputs/ingestion-outputs'
 import { EventIngestionRestrictionManager } from '~/common/utils/event-ingestion-restrictions'
 import { PromiseScheduler } from '~/common/utils/promise-scheduler'
 import { createApplyEventRestrictionsStep, createParseHeadersStep } from '~/ingestion/common/steps/event-preprocessing'
-import { BatchPipelineUnwrapper } from '~/ingestion/framework/batch-pipeline-unwrapper'
+import { AccumulationContext } from '~/ingestion/framework/accumulating-pipeline'
+import { BatchPipeline } from '~/ingestion/framework/batch-pipeline.interface'
 import { newBatchPipelineBuilder } from '~/ingestion/framework/builders'
 import { TopHogRegistry, createTopHogWrapper, sum, timer } from '~/ingestion/framework/extensions/tophog'
-import { createBatch, createUnwrapper } from '~/ingestion/framework/helpers'
 import { PipelineConfig } from '~/ingestion/framework/result-handling-pipeline'
 import { ParsedMessageData } from '~/ingestion/pipelines/sessionreplay/kafka/types'
-import { SessionBatchManager } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-manager'
+import { SessionBatchContext } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-factory'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { ValueMatcher } from '~/types'
@@ -38,8 +38,6 @@ export interface SessionReplayPipelineConfig {
     teamService: TeamService
     /** TopHog registry for tracking metrics. */
     topHog: TopHogRegistry
-    /** Session batch manager for recording sessions. */
-    sessionBatchManager: SessionBatchManager
     /** Debug logging matcher for partition-based debugging. */
     isDebugLoggingEnabled: ValueMatcher<number>
 }
@@ -56,9 +54,10 @@ export interface SessionReplayPipelineConfig {
  */
 export function createSessionReplayPipeline(
     config: SessionReplayPipelineConfig
-): BatchPipelineUnwrapper<
-    SessionReplayPipelineInput,
+): BatchPipeline<
+    SessionReplayPipelineInput & SessionBatchContext & AccumulationContext,
     SessionReplayPipelineOutput,
+    { message: Message },
     { message: Message },
     OverflowOutput
 > {
@@ -69,7 +68,6 @@ export function createSessionReplayPipeline(
         promiseScheduler,
         teamService,
         topHog,
-        sessionBatchManager,
         isDebugLoggingEnabled,
     } = config
 
@@ -80,7 +78,10 @@ export function createSessionReplayPipeline(
 
     const topHogWrapper = createTopHogWrapper(topHog)
 
-    const pipeline = newBatchPipelineBuilder<SessionReplayPipelineInput, { message: Message }>()
+    const pipeline = newBatchPipelineBuilder<
+        SessionReplayPipelineInput & SessionBatchContext & AccumulationContext,
+        { message: Message }
+    >()
         .messageAware((b) =>
             b
                 .sequentially((b) =>
@@ -126,7 +127,6 @@ export function createSessionReplayPipeline(
                                             .pipe(
                                                 topHogWrapper(
                                                     createRecordSessionEventStep({
-                                                        sessionBatchManager,
                                                         isDebugLoggingEnabled,
                                                     }),
                                                     [
@@ -156,37 +156,5 @@ export function createSessionReplayPipeline(
         .gather()
         .build()
 
-    return createUnwrapper(pipeline)
-}
-
-/**
- * Runs a batch of messages through the session replay pipeline.
- *
- * Returns parsed messages for the existing team filtering/processing flow to continue.
- * In future commits, the pipeline will handle all processing internally.
- */
-export async function runSessionReplayPipeline(
-    pipeline: BatchPipelineUnwrapper<
-        SessionReplayPipelineInput,
-        SessionReplayPipelineOutput,
-        { message: Message },
-        OverflowOutput
-    >,
-    messages: Message[]
-): Promise<SessionReplayPipelineOutput[]> {
-    if (messages.length === 0) {
-        return []
-    }
-
-    const batch = createBatch(messages.map((message) => ({ message })))
-    pipeline.feed(batch)
-
-    const allResults: SessionReplayPipelineOutput[] = []
-    let results = await pipeline.next()
-    while (results !== null) {
-        allResults.push(...results)
-        results = await pipeline.next()
-    }
-
-    return allResults
+    return pipeline
 }

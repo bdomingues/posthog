@@ -3,17 +3,16 @@ import { ok } from '~/ingestion/framework/results'
 import { ProcessingStep } from '~/ingestion/framework/steps'
 import { ParsedMessageData } from '~/ingestion/pipelines/sessionreplay/kafka/types'
 import { SessionRecordingIngesterMetrics } from '~/ingestion/pipelines/sessionreplay/metrics'
-import { SessionBatchManager } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-manager'
+import { SessionBatchContext } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-factory'
 import { MessageWithTeam, TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { ValueMatcher } from '~/types'
 
-export interface RecordSessionEventStepInput {
+export interface RecordSessionEventStepInput extends SessionBatchContext {
     team: TeamForReplay
     parsedMessage: ParsedMessageData
 }
 
 export interface RecordSessionEventStepConfig {
-    sessionBatchManager: SessionBatchManager
     isDebugLoggingEnabled: ValueMatcher<number>
 }
 
@@ -28,10 +27,10 @@ export interface RecordSessionEventStepConfig {
 export function createRecordSessionEventStep<T extends RecordSessionEventStepInput>(
     config: RecordSessionEventStepConfig
 ): ProcessingStep<T, T> {
-    const { sessionBatchManager, isDebugLoggingEnabled } = config
+    const { isDebugLoggingEnabled } = config
 
     return async function recordSessionEventStep(input) {
-        const { team, parsedMessage } = input
+        const { team, parsedMessage, sessionBatchRecorder } = input
 
         // Reset revoked sessions counter once we're consuming
         SessionRecordingIngesterMetrics.resetSessionsRevoked()
@@ -54,10 +53,9 @@ export function createRecordSessionEventStep<T extends RecordSessionEventStepInp
 
         SessionRecordingIngesterMetrics.observeSessionInfo(parsedMessage.metadata.rawSize)
 
-        // Record to the session batch
-        const batch = sessionBatchManager.getCurrentBatch()
+        // Record to the session batch carried on the element by the accumulating pipeline
         const messageWithTeam: MessageWithTeam = { team, message: parsedMessage }
-        await batch.record(messageWithTeam)
+        await sessionBatchRecorder.record(messageWithTeam)
 
         return ok(input)
     }
