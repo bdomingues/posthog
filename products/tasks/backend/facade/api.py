@@ -2004,16 +2004,18 @@ def capture_relay_command_telemetry(
 def relay_task_run_message(
     run_id: str | UUID, task_id: str | UUID, team_id: int, *, text: str
 ) -> tuple[str, str | None]:
-    """Queue a Slack relay workflow for a run message.
-
-    Returns ``(status, relay_id)`` where status is ``"accepted"`` (relay_id set), ``"skipped"``
-    (run not found / terminal / no Slack mapping / empty text), or ``"failed"``.
-    """
+    """Queue a Slack relay workflow, or under the agent-design flag signal the
+    running task workflow to stream the text inline. Returns (status, relay_id)."""
     from products.slack_app.backend.models import (  # noqa: PLC0415 — cross-product import kept off the api import path
         SlackThreadTaskMapping,
     )
+    from products.tasks.backend.models import TaskRun  # noqa: PLC0415 — keep ORM off the api import path
     from products.tasks.backend.temporal.client import (  # noqa: PLC0415 — keep temporalio off the api import path
         execute_posthog_code_agent_relay_workflow,
+        signal_agent_text_delta,
+    )
+    from products.tasks.backend.temporal.process_task.activities.feature_flags import (  # noqa: PLC0415 — keep temporal off the api import path
+        AGENT_DESIGN_STATE_KEY,
     )
 
     run = _get_visible_run(run_id, task_id, team_id)
@@ -2024,6 +2026,13 @@ def relay_task_run_message(
 
     trimmed = text.strip()
     if not trimmed:
+        return "skipped", None
+
+    if bool((run.state or {}).get(AGENT_DESIGN_STATE_KEY)):
+        try:
+            signal_agent_text_delta(TaskRun.get_workflow_id(str(run.task_id), str(run.id)), trimmed)
+        except Exception:
+            logger.exception("task_run_relay_text_signal_failed", extra={"run_id": str(run.id)})
         return "skipped", None
 
     try:
