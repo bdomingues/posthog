@@ -2,17 +2,17 @@
 /**
  * Test suite over many real images. Two independent checks, both end-to-end through advancedScrub:
  *
- *  TEXT  (test-data/text/** + corpus/**): OCR (tesseract — a different model than the DBNet detector
- *        used in production) must read ~no confident words from the scrubbed image.
+ *  TEXT: OCR (tesseract, a different model than the production DBNet detector) reads the scrubbed
+ *        image and counts confident multi-character words; near-zero means the text is gone.
  *
- *  FACE  (test-data/faces/**): every face YuNet finds in the ORIGINAL must be heavily altered in the
- *        scrubbed output (mean pixel change in the face box above a threshold). This is not circular:
- *        we use detection on the original only to locate faces, then measure that redaction was
- *        actually applied there — a blurred-but-undetected face would still pass.
+ *  FACE: locate faces in the ORIGINAL with YuNet, scrub, then re-detect at high sensitivity on the
+ *        output; a face still sitting (by IoU) where one was is a leak. A mosaicked face is no
+ *        longer detectable, so this measures that redaction actually landed on the face.
  *
- *   npm run test
+ * Gates on session replay's representative domain (rendered-UI text + faces) and reports on the
+ * harder scanned-document set. Committed fixtures (e.g. the Wikipedia page) run in both checks.
  *
- * Exits non-zero if any image leaks readable text or leaves a detected face un-redacted.
+ *   npm run test   (exits non-zero on a gated text leak or an un-redacted face)
  */
 import './polyfill.ts'
 
