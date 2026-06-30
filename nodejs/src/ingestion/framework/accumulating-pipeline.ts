@@ -30,11 +30,35 @@ export type AccumulatingResult<TRecordOut, CRecordOut, TFlushOut, CFlushOut, R e
     | { flushed: false; elements: BatchPipelineResultWithContext<TRecordOut, CRecordOut, R> }
     | { flushed: true; elements: BatchPipelineResultWithContext<TFlushOut, CFlushOut, R> }
 
-export interface AccumulatingPipelineOptions<CBatch> {
-    /** Size predicate evaluated against the current accumulator on each next(). */
+/**
+ * Constructor config, ordered by when each part runs in a cycle: beforeBatch mints the accumulator,
+ * recordPipeline folds events, shouldFlush/maxBatchAgeMs decide when to flush, then drainAccumulator
+ * snapshots the accumulator and flushPipeline persists it.
+ */
+export interface AccumulatingPipelineConfig<
+    TRecordIn extends object,
+    TRecordOut,
+    CRecordIn,
+    CRecordOut,
+    CBatch,
+    TFlushIn,
+    CFlushIn,
+    TFlushOut,
+    CFlushOut,
+    R extends string = never,
+> {
+    /** Mints a fresh accumulator for each cycle — runs before the first feed and after every flush. */
+    beforeBatch: Pipeline<BeforeAccumulationInput, BeforeAccumulationOutput<CBatch>, Record<string, never>>
+    /** Per-message pipeline that folds records into the current cycle's accumulator. */
+    recordPipeline: BatchPipeline<TRecordIn & CBatch & AccumulationContext, TRecordOut, CRecordIn, CRecordOut, R>
+    /** Size trigger: flush when this returns true for the current accumulator. */
     shouldFlush: (batchContext: CBatch & AccumulationContext) => boolean
     /** Age trigger interval. The timer only marks a flush due; the flush executes inside next(). */
     maxBatchAgeMs: number
+    /** Snapshots the accumulator into flush units (and clears it). */
+    drainAccumulator: (batchContext: CBatch & AccumulationContext) => OkResultWithContext<TFlushIn, CFlushIn>[]
+    /** Flush pipeline that persists the drained units. */
+    flushPipeline: BatchPipeline<TFlushIn, TFlushOut, CFlushIn, CFlushOut, R>
 }
 
 /**
@@ -89,25 +113,46 @@ export class AccumulatingPipeline<
     // via waitForActivity(); it is the liveness mechanism for a future wake-driven drain loop.
     private signal = new ResettableSignal()
 
+    private readonly recordPipeline: BatchPipeline<
+        TRecordIn & CBatch & AccumulationContext,
+        TRecordOut,
+        CRecordIn,
+        CRecordOut,
+        R
+    >
+    private readonly beforePipeline: Pipeline<
+        BeforeAccumulationInput,
+        BeforeAccumulationOutput<CBatch>,
+        Record<string, never>
+    >
+    private readonly drainAccumulator: (
+        batchContext: CBatch & AccumulationContext
+    ) => OkResultWithContext<TFlushIn, CFlushIn>[]
+    private readonly flushPipeline: BatchPipeline<TFlushIn, TFlushOut, CFlushIn, CFlushOut, R>
+    private readonly shouldFlush: (batchContext: CBatch & AccumulationContext) => boolean
+    private readonly maxBatchAgeMs: number
+
     constructor(
-        private recordPipeline: BatchPipeline<
-            TRecordIn & CBatch & AccumulationContext,
+        config: AccumulatingPipelineConfig<
+            TRecordIn,
             TRecordOut,
             CRecordIn,
             CRecordOut,
+            CBatch,
+            TFlushIn,
+            CFlushIn,
+            TFlushOut,
+            CFlushOut,
             R
-        >,
-        private beforePipeline: Pipeline<
-            BeforeAccumulationInput,
-            BeforeAccumulationOutput<CBatch>,
-            Record<string, never>
-        >,
-        private drainAccumulator: (
-            batchContext: CBatch & AccumulationContext
-        ) => OkResultWithContext<TFlushIn, CFlushIn>[],
-        private flushPipeline: BatchPipeline<TFlushIn, TFlushOut, CFlushIn, CFlushOut, R>,
-        private options: AccumulatingPipelineOptions<CBatch>
-    ) {}
+        >
+    ) {
+        this.recordPipeline = config.recordPipeline
+        this.beforePipeline = config.beforeBatch
+        this.drainAccumulator = config.drainAccumulator
+        this.flushPipeline = config.flushPipeline
+        this.shouldFlush = config.shouldFlush
+        this.maxBatchAgeMs = config.maxBatchAgeMs
+    }
 
     /** Arms the age timer. Idempotent-ish: call once after construction. */
     public start(): void {
@@ -175,7 +220,7 @@ export class AccumulatingPipeline<
         }
 
         // Main pipeline empty → flush on size or age.
-        const sizeDue = this.currentBatchContext !== null && this.options.shouldFlush(this.currentBatchContext)
+        const sizeDue = this.currentBatchContext !== null && this.shouldFlush(this.currentBatchContext)
         if (this.flushDue || sizeDue) {
             return await this.flushNow()
         }
@@ -235,7 +280,7 @@ export class AccumulatingPipeline<
         this.timer = setInterval(() => {
             this.flushDue = true
             this.signal.resolve()
-        }, this.options.maxBatchAgeMs)
+        }, this.maxBatchAgeMs)
     }
 
     // Re-arm so the age boundary is measured from this flush, not from the last timer tick —

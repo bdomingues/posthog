@@ -93,20 +93,18 @@ describe('AccumulatingPipeline', () => {
             Record<string, never>,
             { id: number },
             Record<string, never>
-        >(
-            new FoldingRecordPipeline(),
-            beforePipeline,
-            (batchContext) => {
+        >({
+            recordPipeline: new FoldingRecordPipeline(),
+            beforeBatch: beforePipeline,
+            shouldFlush: (batchContext) => batchContext.records.length >= options.flushAt,
+            maxBatchAgeMs: options.maxBatchAgeMs ?? 60_000,
+            drainAccumulator: (batchContext) => {
                 const units = batchContext.records.map((id) => createOkContext({ id }, {}))
                 batchContext.records.length = 0
                 return units
             },
             flushPipeline,
-            {
-                shouldFlush: (batchContext) => batchContext.records.length >= options.flushAt,
-                maxBatchAgeMs: options.maxBatchAgeMs ?? 60_000,
-            }
-        )
+        })
     }
 
     async function drainNext(pipeline: ReturnType<typeof createPipeline>) {
@@ -284,17 +282,18 @@ describe('AccumulatingPipeline', () => {
             Record<string, never>,
             { id: number },
             Record<string, never>
-        >(
-            new FoldingRecordPipeline(),
-            beforePipeline,
-            (batchContext) => {
+        >({
+            recordPipeline: new FoldingRecordPipeline(),
+            beforeBatch: beforePipeline,
+            shouldFlush: () => false,
+            maxBatchAgeMs: 60_000,
+            drainAccumulator: (batchContext) => {
                 const units = batchContext.records.map((id) => createOkContext({ id }, {}))
                 batchContext.records.length = 0
                 return units
             },
-            new PassthroughFlushPipeline(),
-            { shouldFlush: () => false, maxBatchAgeMs: 60_000 }
-        )
+            flushPipeline: new PassthroughFlushPipeline(),
+        })
 
         await pipeline.feed(feedBatch([1]))
 
@@ -334,13 +333,14 @@ describe('AccumulatingPipeline', () => {
             Record<string, never>,
             { id: number },
             Record<string, never>
-        >(
-            new FoldingRecordPipeline(),
-            beforePipeline,
-            (batchContext) => batchContext.records.map((id) => createOkContext({ id }, {})),
-            new PassthroughFlushPipeline(),
-            { shouldFlush: () => false, maxBatchAgeMs: 60_000 }
-        )
+        >({
+            recordPipeline: new FoldingRecordPipeline(),
+            beforeBatch: beforePipeline,
+            shouldFlush: () => false,
+            maxBatchAgeMs: 60_000,
+            drainAccumulator: (batchContext) => batchContext.records.map((id) => createOkContext({ id }, {})),
+            flushPipeline: new PassthroughFlushPipeline(),
+        })
 
         await expect(pipeline.feed(feedBatch([1]))).rejects.toThrow('beforeBatch returned non-ok result')
     })

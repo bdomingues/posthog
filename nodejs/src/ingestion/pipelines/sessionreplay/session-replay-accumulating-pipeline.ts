@@ -53,31 +53,6 @@ export interface SessionReplayAccumulatingPipelineConfig {
     maxBatchAgeMs: number
 }
 
-/** beforeBatch hook: mint a fresh recorder for the next accumulation cycle. */
-function createBeforeBatchPipeline(sessionBatchFactory: SessionBatchFactory) {
-    const beforeBatchStep: ProcessingStep<BeforeAccumulationInput, BeforeAccumulationOutput<SessionBatchContext>> = (
-        input
-    ) =>
-        Promise.resolve(
-            ok({ batchContext: { sessionBatchRecorder: sessionBatchFactory.createBatch(), batchId: input.batchId } })
-        )
-    return newPipelineBuilder<BeforeAccumulationInput>().pipe(beforeBatchStep).build()
-}
-
-/** flush step: write the accumulated batch to storage (without committing offsets). */
-function createFlushPipeline(): BatchPipeline<
-    SessionBatchRecorder,
-    SessionBlockMetadata[],
-    Record<string, never>,
-    Record<string, never>
-> {
-    const flushStep: ProcessingStep<SessionBatchRecorder, SessionBlockMetadata[]> = async (recorder) =>
-        ok(await recorder.flushToStorage())
-    return newBatchPipelineBuilder<SessionBatchRecorder, Record<string, never>>()
-        .sequentially((b) => b.pipe(flushStep))
-        .build()
-}
-
 /**
  * Assembles the session replay accumulating pipeline: the record pipeline folds events into a
  * recorder minted per cycle by the factory; the flush pipeline writes the recorder to storage on a
@@ -88,14 +63,26 @@ export function createSessionReplayAccumulatingPipeline(
 ): SessionReplayAccumulatingPipeline {
     const { recordPipeline, sessionBatchFactory, maxBatchSizeBytes, maxBatchAgeMs } = config
 
-    return new AccumulatingPipeline(
+    // beforeBatch: mint a fresh recorder for the next accumulation cycle.
+    const beforeBatchStep: ProcessingStep<BeforeAccumulationInput, BeforeAccumulationOutput<SessionBatchContext>> = (
+        input
+    ) =>
+        Promise.resolve(
+            ok({ batchContext: { sessionBatchRecorder: sessionBatchFactory.createBatch(), batchId: input.batchId } })
+        )
+
+    // flush step: write the accumulated batch to storage (without committing offsets).
+    const flushStep: ProcessingStep<SessionBatchRecorder, SessionBlockMetadata[]> = async (recorder) =>
+        ok(await recorder.flushToStorage())
+
+    return new AccumulatingPipeline({
+        beforeBatch: newPipelineBuilder<BeforeAccumulationInput>().pipe(beforeBatchStep).build(),
         recordPipeline,
-        createBeforeBatchPipeline(sessionBatchFactory),
-        (batchContext) => [createOkContext(batchContext.sessionBatchRecorder, {})],
-        createFlushPipeline(),
-        {
-            shouldFlush: (batchContext) => batchContext.sessionBatchRecorder.size >= maxBatchSizeBytes,
-            maxBatchAgeMs,
-        }
-    )
+        shouldFlush: (batchContext) => batchContext.sessionBatchRecorder.size >= maxBatchSizeBytes,
+        maxBatchAgeMs,
+        drainAccumulator: (batchContext) => [createOkContext(batchContext.sessionBatchRecorder, {})],
+        flushPipeline: newBatchPipelineBuilder<SessionBatchRecorder, Record<string, never>>()
+            .sequentially((b) => b.pipe(flushStep))
+            .build(),
+    })
 }
