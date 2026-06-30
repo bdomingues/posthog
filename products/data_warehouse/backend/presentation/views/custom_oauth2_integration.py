@@ -1,10 +1,13 @@
 from typing import Any
 
+from django.db.models import Q
+
 import structlog
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from prometheus_client import Counter
 from rest_framework import serializers, viewsets
+from rest_framework.exceptions import PermissionDenied
 
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.api.scoped_related_fields import TeamScopedPrimaryKeyRelatedField
@@ -282,9 +285,29 @@ class CustomOAuth2IntegrationViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewS
     ordering = "-created_at"
 
     def safely_get_queryset(self, queryset: Any) -> Any:
-        return queryset.filter(team_id=self.team_id).order_by(self.ordering)
+        queryset = queryset.filter(team_id=self.team_id)
+        # `scope_object = "external_data_source"` but this serves CustomOAuth2Integration rows, which aren't
+        # in the RBAC model→resource map — so object-level checks no-op and a user with access to ANY source
+        # could otherwise see every integration in the team. Gate each integration on its linked source's
+        # visibility instead. Unlinked rows (the brief create→link window) stay team-visible since they
+        # don't yet back a restricted source.
+        accessible_sources = self.user_access_control.filter_queryset_by_access_level(
+            ExternalDataSource.objects.filter(team_id=self.team_id)
+        )
+        queryset = queryset.filter(
+            Q(external_data_source__isnull=True) | Q(external_data_source__in=accessible_sources)
+        )
+        return queryset.order_by(self.ordering)
+
+    def _assert_can_edit_source(self, source: ExternalDataSource | None) -> None:
+        # Reads are gated by safely_get_queryset (source visibility), but rotating a secret, retargeting, or
+        # deleting an integration must require editor — not merely viewer — access to the source it backs.
+        # Unlinked rows have no source to gate on (the creator manages them until a source points at them).
+        if source is not None and not self.user_access_control.check_access_level_for_object(source, "editor"):
+            raise PermissionDenied("You do not have edit access to the data source this integration backs.")
 
     def perform_create(self, serializer: serializers.BaseSerializer) -> None:
+        self._assert_can_edit_source(serializer.validated_data.get("external_data_source"))
         # team_scope(): ModelActivityMixin re-queries through the model's fail-closed manager on save,
         # and the team-nested mixin scopes querysets by explicit team_id rather than setting the ambient
         # context that manager reads — so the save needs the scope set explicitly.
@@ -292,5 +315,11 @@ class CustomOAuth2IntegrationViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewS
             serializer.save(team_id=self.team_id, created_by=self.request.user)
 
     def perform_update(self, serializer: serializers.BaseSerializer) -> None:
+        self._assert_can_edit_source(serializer.instance.external_data_source)
         with team_scope(self.team_id):
             serializer.save()
+
+    def perform_destroy(self, instance: CustomOAuth2Integration) -> None:
+        self._assert_can_edit_source(instance.external_data_source)
+        with team_scope(self.team_id):
+            instance.delete()
