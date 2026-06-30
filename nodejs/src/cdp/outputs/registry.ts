@@ -6,6 +6,7 @@ import {
     PRECALCULATED_PERSON_PROPERTIES_OUTPUT,
     PREFILTERED_EVENTS_OUTPUT,
     WAREHOUSE_SOURCE_WEBHOOKS_OUTPUT,
+    WAREHOUSE_WEBHOOK_DELIVERY_STATUS_OUTPUT,
 } from './outputs'
 
 /**
@@ -20,6 +21,9 @@ import {
  *   precalculated-filters consumer writes to ClickHouse.
  * - `BATCH_HOGFLOW_REQUESTS_OUTPUT` — batch hogflow invocation queue.
  * - `WAREHOUSE_SOURCE_WEBHOOKS_OUTPUT` — warehouse source webhook payloads.
+ * - `WAREHOUSE_WEBHOOK_DELIVERY_STATUS_OUTPUT` — warehouse source webhook
+ *   delivery outcomes (status + reason) the data import pipeline reads to detect
+ *   persistently failing webhooks (e.g. a bad signing secret).
  */
 export function createCdpOutputsRegistry() {
     return new IngestionOutputsBuilder()
@@ -50,5 +54,9 @@ export function createCdpOutputsRegistry() {
         .register(WAREHOUSE_SOURCE_WEBHOOKS_OUTPUT, {
             topicKey: 'CDP_WAREHOUSE_SOURCE_WEBHOOKS_TOPIC',
             producerKey: 'CDP_WAREHOUSE_SOURCE_WEBHOOKS_PRODUCER',
+        })
+        .register(WAREHOUSE_WEBHOOK_DELIVERY_STATUS_OUTPUT, {
+            topicKey: 'CDP_WAREHOUSE_WEBHOOK_DELIVERY_STATUS_TOPIC',
+            producerKey: 'CDP_WAREHOUSE_WEBHOOK_DELIVERY_STATUS_PRODUCER',
         })
 }
