@@ -95,6 +95,14 @@ export interface StageTimings {
 const NSFW_THRESHOLD = 0.6 // Porn/Hentai/Sexy combined; deliberately loose, this is a safety net
 const PNG_LEVEL = Number(process.env.PNG_LEVEL ?? 3) // sharp png compressionLevel; lower = faster, bigger
 const PIXELATE_ENV = process.env.PIXELATE ? Number(process.env.PIXELATE) : null
+// Text gets a SOLID mean-colour fill (irreversible) rather than a blur/mosaic (a low-pass filter that
+// leaves coarse structure an LLM can still read). Margin scales with box height — our horizontal-only
+// dilation makes each box one line, so its height is a font-size proxy — so big titles get a big
+// margin. Edges are feathered so the fill isn't a jarring hard rectangle.
+const TEXT_MARGIN_FRAC = Number(process.env.TEXT_MARGIN_FRAC ?? 0.25) // top/side margin as a fraction of box height
+const TEXT_MARGIN_BOTTOM_FRAC = Number(process.env.TEXT_MARGIN_BOTTOM_FRAC ?? 0.45) // extra below for descenders
+const TEXT_MARGIN_MIN = Number(process.env.TEXT_MARGIN_MIN ?? 4) // floor in px for tiny text
+const EDGE_BLUR = Number(process.env.EDGE_BLUR ?? 4) // sigma to feather redaction-region edges
 
 /** Mosaic block size (~px). Scales with resolution so retina text is destroyed, not just softened,
  *  while small images aren't over-blocked. Re-detection by the verifier confirms it's strong enough. */
@@ -308,40 +316,97 @@ async function compose(
         return out0
     }
 
-    // Pixelate (downscale -> nearest-neighbour upscale) instead of a full-frame gaussian blur:
-    // de-identifies text/faces just as well (mosaic) and is cheaper than blur(sigma).
-    // NOTE: sharp applies only ONE resize per pipeline, so the down- and up-scale MUST be two
-    // separate sharp() calls — chaining them in one pipeline silently drops the downscale.
+    // Faces: mosaic (keeps the "a person is here" context while hiding identity). Built once as a
+    // full-frame downscale -> nearest upscale; we copy only the face regions out of it.
+    // NOTE: sharp does ONE resize per pipeline, so down- and up-scale are two separate pipelines.
     const block = pixelateBlock(W, H)
     const pw = Math.max(1, Math.round(W / block))
     const ph = Math.max(1, Math.round(H / block))
-    // Keep intermediates as raw RGB (no PNG round-trips). NOTE: sharp does ONE resize per pipeline,
-    // so down- and up-scale are two separate pipelines.
     const small = await srcSharp(src).resize(pw, ph, { fit: 'fill' }).raw().toBuffer()
-    const pixelatedFull = await sharp(small, { raw: { width: pw, height: ph, channels: 3 } })
+    const mosaic = await sharp(small, { raw: { width: pw, height: ph, channels: 3 } })
         .resize(W, H, { fit: 'fill', kernel: 'nearest' })
         .raw()
         .toBuffer()
 
-    // Build the keep-mask as a raw single-channel alpha buffer (255 inside boxes). Much cheaper than
-    // rasterizing an SVG with ~100 <rect>s over a multi-megapixel canvas.
-    const alpha = new Uint8Array(W * H)
-    for (const b of allBoxes) {
+    // Redaction layer starts as a copy of the source; we OVERWRITE regions rather than low-pass
+    // filter them, so text is destroyed (irreversible) not merely softened. Text and faces get
+    // SEPARATE masks because they composite differently (faces must NOT be blurred — see below).
+    const red = Buffer.from(src.data)
+    const alphaText = new Uint8Array(W * H)
+    const alphaFace = new Uint8Array(W * H)
+
+    for (const b of faceBoxes) {
         for (let y = b.top; y < b.top + b.height; y++) {
-            alpha.fill(255, y * W + b.left, y * W + b.left + b.width)
+            const o = (y * W + b.left) * 3
+            mosaic.copy(red, o, o, o + b.width * 3)
+            alphaFace.fill(255, y * W + b.left, y * W + b.left + b.width)
         }
     }
-    const pixelatedMasked = await sharp(pixelatedFull, { raw: { width: W, height: H, channels: 3 } })
-        .joinChannel(Buffer.from(alpha.buffer), { raw: { width: W, height: H, channels: 1 } })
-        .png()
-        .toBuffer()
+
+    // Text: fill each box with its mean colour, plus a margin scaled to box height (= font size). The
+    // bottom margin is larger because DBNet boxes sit on the baseline, so descenders (g, y, p, q, j)
+    // hang below the box and need extra coverage. A uniform fill leaves no glyph structure.
+    for (const t of textBoxes) {
+        const m = Math.round(Math.max(TEXT_MARGIN_MIN, t.height * TEXT_MARGIN_FRAC))
+        const mb = Math.round(Math.max(TEXT_MARGIN_MIN, t.height * TEXT_MARGIN_BOTTOM_FRAC))
+        const b = clampBox(
+            { left: t.left - m, top: t.top - m, width: t.width + 2 * m, height: t.height + m + mb },
+            W,
+            H
+        )
+        if (!b) {
+            continue
+        }
+        let r = 0,
+            g = 0,
+            bl = 0
+        const n = b.width * b.height
+        for (let y = b.top; y < b.top + b.height; y++) {
+            let idx = (y * W + b.left) * 3
+            for (let x = 0; x < b.width; x++, idx += 3) {
+                r += src.data[idx]
+                g += src.data[idx + 1]
+                bl += src.data[idx + 2]
+            }
+        }
+        r = Math.round(r / n)
+        g = Math.round(g / n)
+        bl = Math.round(bl / n)
+        for (let y = b.top; y < b.top + b.height; y++) {
+            let idx = (y * W + b.left) * 3
+            for (let x = 0; x < b.width; x++, idx += 3) {
+                red[idx] = r
+                red[idx + 1] = g
+                red[idx + 2] = bl
+            }
+            alphaText.fill(255, y * W + b.left, y * W + b.left + b.width)
+        }
+    }
+
+    const textLayer = Buffer.from(alphaText.buffer, alphaText.byteOffset, alphaText.byteLength)
+    const faceLayer = Buffer.from(alphaFace.buffer, alphaFace.byteOffset, alphaFace.byteLength)
+    const raw3 = { raw: { width: W, height: H, channels: 3 } } as const
+    const raw1 = { raw: { width: W, height: H, channels: 1 } } as const
+
+    // Text: solid bars whose edges are softened by blurring the COLOUR layer (alpha stays hard, so no
+    // original text is ever revealed; the blur only fades the fill into its background margin).
+    const redBlurred = EDGE_BLUR > 0 ? await sharp(red, raw3).blur(EDGE_BLUR).raw().toBuffer() : red
+    const composites: sharp.OverlayOptions[] = [
+        { input: await sharp(redBlurred, raw3).joinChannel(textLayer, raw1).png().toBuffer(), left: 0, top: 0 },
+    ]
+    // Faces: composite the CRISP (unblurred) mosaic. Blurring a mosaic re-smooths it into a face a
+    // detector can find again, so the face layer must skip the edge blur the text layer uses.
+    if (faceBoxes.length > 0) {
+        composites.push({
+            input: await sharp(red, raw3).joinChannel(faceLayer, raw1).png().toBuffer(),
+            left: 0,
+            top: 0,
+        })
+    }
 
     timings.composeMs = performance.now() - tC
     const tE = performance.now()
-    const out = await srcSharp(src)
-        .composite([{ input: pixelatedMasked, left: 0, top: 0 }])
-        .png({ compressionLevel: PNG_LEVEL })
-        .toBuffer()
+    const out = await srcSharp(src).composite(composites).png({ compressionLevel: PNG_LEVEL }).toBuffer()
     timings.encodeMs = performance.now() - tE
     return out
 }

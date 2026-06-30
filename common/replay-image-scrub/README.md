@@ -3,11 +3,21 @@
 Image scrubber for the session-replay ML-training mirror. Given an inlined replay image it:
 
 1. **NSFW/gore gate**: if the image is explicit, it collapses to a 1x1 blank.
-2. **Face blur**: every detected face is mosaicked (the rest of the frame, e.g. clothing, is kept).
-3. **Text blur**: every detected text region is mosaicked (we detect _where_ text is; we never read it).
+2. **Face mosaic**: every detected face is mosaicked (the rest of the frame, e.g. clothing, is kept).
+3. **Text redaction**: every detected text region is filled with its **mean colour** (a solid,
+   irreversible fill), with a margin scaled to the box height (= font size) and softened edges. We
+   detect _where_ text is and never read it.
 
 The goal is to protect data labellers and reduce PII exposure. It does not need to be perfect; the
 self-verifying test (below) keeps it honest.
+
+**Why solid fill, not blur/mosaic, for text.** Blur and pixelation are low-pass filters: they remove
+fine detail but keep coarse structure, so large text (titles, headings) stays legible to a capable
+reader. We confirmed an LLM could still read blurred titles and the opening sentence of a test page.
+A solid mean-colour fill removes the information entirely. Faces stay mosaicked (identity is in the
+fine detail a mosaic destroys, and the mosaic keeps useful "a person is here" context); text needs
+the stronger treatment. Note the edge blur is applied to the text fill's _colour_ only, never the
+mask, and never the face mosaic (blurring a mosaic re-smooths it into a detectable face).
 
 ## This is native code, not ML-in-JS
 
@@ -29,7 +39,7 @@ packing, mask fill), which runs over the small detection maps and is not the bot
 
 ```text
 src/
-  scrub.ts        pipeline: decode-once, NSFW gate, face (YuNet) + text (DBNet), pixelate-compose
+  scrub.ts        pipeline: decode-once, NSFW gate, face (YuNet) mosaic + text (DBNet) solid-fill
   yunet.ts        YuNet face detector (ONNX): single multi-scale pass, no tiling
   dbnet.ts        DBNet text-region detector (ONNX): threshold + dilation + connected components
   src-image.ts    decode the source PNG once to raw RGB, shared across stages
