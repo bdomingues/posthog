@@ -35,11 +35,34 @@ We do not train anything and run no neural nets in JS. The only hand-written JS 
 decoding (DBNet threshold + dilation + connected components, YuNet anchor decode + NMS, tensor
 packing, mask fill), which runs over the small detection maps and is not the bottleneck.
 
+## Two sides: producer and consumer
+
+The expensive scrub (this package's `scrub.ts`) runs in a **separate consumer worker**, not inline.
+The original replay worker (**producer**, `routing.ts` + `content-ref.ts` + `producer.ts`) decides
+per image what to do, replaces the inline `rr_dataURL` with a reference, and hands the heavy work off
+via a Kafka topic:
+
+| image                                        | route         | handling                                                                                                                             |
+| -------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| tiny (≤16px long side)                       | `passthrough` | left untouched — below the detector floor, so scrubbing finds nothing, and these icons/logos are high-signal training data           |
+| canvas (`<canvas>` pixels, canvas mutations) | `cheap`       | existing in-process downsample+blur — canvas is dynamic and dedups ~never, so the topic path would flood S3/compute                  |
+| `<img>` / media raster                       | `advanced`    | replace with `image:{team}:{hash}`, dedup in Redis (`SET NX`, 24h), post raw bytes to the topic; the consumer blurs and writes to S3 |
+| oversize (> ~1MB, won't fit the topic)       | `cheap`       | in-process blur fallback                                                                                                             |
+
+Redis presence means "posted to the topic recently" (dedup), **not** "scrubbed image is in S3" — a
+reference can resolve to nothing until the consumer catches up, which is fine. The `image:{team}:{hash}`
+reference is team-scoped so dedup and S3 storage stay per-tenant (identical bytes in two teams never
+share a scrubbed object). Ports (`DedupStore`/`TopicProducer`) are injected so the producer logic
+drops into the real `ml-mirror` pipeline during integration; `*.test.ts` cover it without live infra.
+
 ## Layout
 
 ```text
 src/
-  scrub.ts        pipeline: decode-once, NSFW gate, face (YuNet) mosaic + text (DBNet) solid-fill
+  routing.ts      producer-side: decide passthrough / cheap-blur / advanced per image
+  content-ref.ts  producer-side: team-scoped content reference image:{team}:{hash}
+  producer.ts     producer-side: dedup (Redis) + post raw image to the scrub topic
+  scrub.ts        consumer-side pipeline: decode-once, NSFW gate, face mosaic + text solid-fill
   yunet.ts        YuNet face detector (ONNX): single multi-scale pass, no tiling
   dbnet.ts        DBNet text-region detector (ONNX): threshold + dilation + connected components
   src-image.ts    decode the source PNG once to raw RGB, shared across stages

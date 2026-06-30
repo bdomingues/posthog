@@ -11,12 +11,17 @@
         "scale": "tsx src/scale.ts",
         "verify": "tsx src/verify.ts",
         "test": "tsx src/test.ts",
-        "test:unit": "tsx --test src/*.test.ts"
+        "test:unit": "tsx --test src/*.test.ts",
+        "consume": "tsx src/consumer.ts",
+        "produce": "tsx src/produce.ts"
     },
     "dependencies": {
+        "@aws-sdk/client-s3": "^3.1076.0",
         "@tensorflow/tfjs": "^4.22.0",
         "@tensorflow/tfjs-backend-wasm": "^4.22.0",
         "@tensorflow/tfjs-node": "^4.22.0",
+        "ioredis": "^5.11.1",
+        "kafkajs": "^2.2.4",
         "nsfwjs": "^4.2.1",
         "onnxruntime-node": "^1.27.0",
         "sharp": "^0.34.5",
