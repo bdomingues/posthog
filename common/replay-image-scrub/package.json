@@ -10,7 +10,8 @@
         "bench": "tsx src/bench.ts",
         "scale": "tsx src/scale.ts",
         "verify": "tsx src/verify.ts",
-        "test": "tsx src/test.ts"
+        "test": "tsx src/test.ts",
+        "test:unit": "tsx --test src/*.test.ts"
     },
     "dependencies": {
         "@tensorflow/tfjs": "^4.22.0",
