@@ -8,7 +8,7 @@
         "skipLibCheck": true,
         "noEmit": true,
         "allowImportingTsExtensions": true,
-        "types": ["node"]
+        "types": ["node", "jest"]
     },
     "include": ["src/**/*.ts", "dev/**/*.ts"]
 }

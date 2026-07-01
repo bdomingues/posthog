@@ -1,6 +1,3 @@
-import assert from 'node:assert/strict'
-import { test } from 'node:test'
-
 import { ImageBatcher } from '../src/batcher.ts'
 import type { ImageShardStore, ScrubbedImage } from '../src/shard-store.ts'
 
@@ -38,58 +35,57 @@ function batcher(
     )
 }
 
-test('flushes on the image-count threshold and groups by team into one shard each', async () => {
-    const store = new FakeStore()
-    const b = batcher(store, { maxImages: 3 })
+describe('ImageBatcher', () => {
+    it('flushes on the image-count threshold and groups by team into one shard each', async () => {
+        const store = new FakeStore()
+        const b = batcher(store, { maxImages: 3 })
 
-    b.add(img(42, 'a'))
-    b.add(img(99, 'b'))
-    assert.equal(b.shouldFlush(0), false) // 2 < 3
-    b.add(img(42, 'c'))
-    assert.equal(b.shouldFlush(0), true) // 3 >= 3
+        b.add(img(42, 'a'))
+        b.add(img(99, 'b'))
+        expect(b.shouldFlush(0)).toBe(false) // 2 < 3
+        b.add(img(42, 'c'))
+        expect(b.shouldFlush(0)).toBe(true) // 3 >= 3
 
-    await b.flush(0)
-    assert.equal(store.writes.length, 2) // one shard per team
-    assert.deepEqual(store.writes.find((w) => w.teamId === 42)?.hashes, ['a', 'c'])
-    assert.deepEqual(store.writes.find((w) => w.teamId === 99)?.hashes, ['b'])
-    assert.equal(b.size, 0)
-})
+        await b.flush(0)
+        expect(store.writes.length).toBe(2) // one shard per team
+        expect(store.writes.find((w) => w.teamId === 42)?.hashes).toEqual(['a', 'c'])
+        expect(store.writes.find((w) => w.teamId === 99)?.hashes).toEqual(['b'])
+        expect(b.size).toBe(0)
+    })
 
-test('flushes on the byte threshold', () => {
-    const store = new FakeStore()
-    const b = batcher(store, { maxBytes: 100 })
-    b.add(img(1, 'a', 60))
-    assert.equal(b.shouldFlush(0), false)
-    b.add(img(1, 'b', 60))
-    assert.equal(b.shouldFlush(0), true) // 120 >= 100
-})
+    it('flushes on the byte threshold', () => {
+        const store = new FakeStore()
+        const b = batcher(store, { maxBytes: 100 })
+        b.add(img(1, 'a', 60))
+        expect(b.shouldFlush(0)).toBe(false)
+        b.add(img(1, 'b', 60))
+        expect(b.shouldFlush(0)).toBe(true) // 120 >= 100
+    })
 
-test('flushes on the interval only when there is something buffered', () => {
-    const store = new FakeStore()
-    const b = batcher(store, { intervalMs: 1000 })
-    assert.equal(b.shouldFlush(5000), false) // empty, no flush
-    b.add(img(1, 'a'))
-    assert.equal(b.shouldFlush(500), false) // not old enough
-    assert.equal(b.shouldFlush(1000), true) // 1000 - 0 >= 1000
-})
+    it('flushes on the interval only when there is something buffered', () => {
+        const store = new FakeStore()
+        const b = batcher(store, { intervalMs: 1000 })
+        expect(b.shouldFlush(5000)).toBe(false) // empty, no flush
+        b.add(img(1, 'a'))
+        expect(b.shouldFlush(500)).toBe(false) // not old enough
+        expect(b.shouldFlush(1000)).toBe(true) // 1000 - 0 >= 1000
+    })
 
-test('a failed write throws and keeps offsets un-committed; the retried images flush next time', async () => {
-    const store = new FakeStore()
-    const b = batcher(store)
-    b.add(img(1, 'a'))
-    b.add(img(1, 'b'))
-    store.fail = true
-    await assert.rejects(b.flush(0))
-    // The snapshot was cleared on flush; those images redeliver from Kafka (offsets weren't committed).
-    assert.equal(b.size, 0)
-    assert.equal(store.writes.length, 0)
+    it('a failed write throws and keeps offsets un-committed; the retried images flush next time', async () => {
+        const store = new FakeStore()
+        const b = batcher(store)
+        b.add(img(1, 'a'))
+        b.add(img(1, 'b'))
+        store.fail = true
+        await expect(b.flush(0)).rejects.toThrow()
+        // The snapshot was cleared on flush; those images redeliver from Kafka (offsets weren't committed).
+        expect(b.size).toBe(0)
+        expect(store.writes.length).toBe(0)
 
-    store.fail = false
-    b.add(img(1, 'a')) // redelivered
-    b.add(img(1, 'b'))
-    await b.flush(0)
-    assert.deepEqual(
-        store.writes.map((w) => w.hashes),
-        [['a', 'b']]
-    )
+        store.fail = false
+        b.add(img(1, 'a')) // redelivered
+        b.add(img(1, 'b'))
+        await b.flush(0)
+        expect(store.writes.map((w) => w.hashes)).toEqual([['a', 'b']])
+    })
 })
