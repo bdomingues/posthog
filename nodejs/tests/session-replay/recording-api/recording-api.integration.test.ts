@@ -459,7 +459,7 @@ describe('Recording API encryption integration', () => {
         let decryptor: SodiumRecordingDecryptor
 
         const mockRetentionService = {
-            getSessionRetentionDays: jest.fn().mockResolvedValue(30),
+            getSessionRetentionDays: jest.fn().mockResolvedValue({ resolved: true, retentionPeriodDays: 30 }),
         }
 
         async function setupKmsKey(): Promise<void> {

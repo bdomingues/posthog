@@ -10,26 +10,15 @@ import { RedisPool, TeamId } from '~/types'
 import { RetentionServiceMetrics } from './metrics'
 
 /**
- * A permanent retention lookup failure — the team is unknown/deleted or the stored value is
- * invalid. Marked non-retriable (unlike a transient Redis failure), so retry wrappers give up on
- * it and callers drop the session instead of retrying forever.
- */
-export class RetentionLookupError extends Error {
-    public readonly isRetriable = false
-
-    constructor(message: string) {
-        super(message)
-        this.name = 'RetentionLookupError'
-    }
-}
-
-/**
  * Outcome of resolving one session's retention. `resolved: false` is the expected, permanent
  * "can't determine retention" case (deleted/unknown team, invalid stored value) — the caller drops
  * that session. A transient failure (e.g. Redis unavailable) is thrown, not returned, so a retry
  * wrapper can re-run the lookup.
  */
 export type RetentionResolution = { resolved: true; retentionPeriod: RetentionPeriod } | { resolved: false }
+
+/** As {@link RetentionResolution}, but resolved to a concrete number of retention days. */
+export type RetentionDaysResolution = { resolved: true; retentionPeriodDays: number } | { resolved: false }
 
 function isValidRetentionPeriod(retentionPeriod: string): retentionPeriod is RetentionPeriod {
     return ValidRetentionPeriods.includes(retentionPeriod as RetentionPeriod)
@@ -46,18 +35,18 @@ export class RetentionService {
         return `${this.keyPrefix}session-retention-${sessionId}`
     }
 
-    public async getRetentionByTeamId(teamId: TeamId): Promise<RetentionPeriod> {
+    /** Returns the team's retention period, or null if the team is unknown/has none set. */
+    public async getRetentionByTeamId(teamId: TeamId): Promise<RetentionPeriod | null> {
         const retentionPeriod = await this.teamService.getRetentionPeriodByTeamId(teamId)
 
         if (retentionPeriod === null) {
             RetentionServiceMetrics.incrementLookupErrors()
-            throw new RetentionLookupError(`Error during retention period lookup: Unknown team id ${teamId}`)
         }
 
         return retentionPeriod
     }
 
-    public async getSessionRetention(teamId: TeamId, sessionId: string): Promise<RetentionPeriod> {
+    public async getSessionRetention(teamId: TeamId, sessionId: string): Promise<RetentionResolution> {
         let retentionPeriod: string | null = null
 
         const startTime = performance.now()
@@ -74,7 +63,9 @@ export class RetentionService {
                 retentionPeriod = await this.getRetentionByTeamId(teamId)
 
                 // ...and then set it in Redis for future batches, with a TTL of 24 hours
-                await client.set(redisKey, retentionPeriod, 'EX', 24 * 60 * 60)
+                if (retentionPeriod !== null) {
+                    await client.set(redisKey, retentionPeriod, 'EX', 24 * 60 * 60)
+                }
             }
         } finally {
             await this.redisPool.release(client)
@@ -82,11 +73,14 @@ export class RetentionService {
         }
 
         if (retentionPeriod !== null && isValidRetentionPeriod(retentionPeriod)) {
-            return retentionPeriod
-        } else {
-            RetentionServiceMetrics.incrementLookupErrors()
-            throw new RetentionLookupError(`Error during retention period lookup: Got invalid value ${retentionPeriod}`)
+            return { resolved: true, retentionPeriod }
         }
+        // A non-null but invalid stored value is an error; an unknown team was already counted in
+        // getRetentionByTeamId.
+        if (retentionPeriod !== null) {
+            RetentionServiceMetrics.incrementLookupErrors()
+        }
+        return { resolved: false }
     }
 
     /**
@@ -159,15 +153,17 @@ export class RetentionService {
         }
     }
 
-    public async getSessionRetentionDays(teamId: TeamId, sessionId: string): Promise<number> {
-        const retentionPeriod = await this.getSessionRetention(teamId, sessionId)
-        const retentionPeriodDays = RetentionPeriodToDaysMap[retentionPeriod]
-
-        if (retentionPeriodDays !== null) {
-            return retentionPeriodDays
-        } else {
-            RetentionServiceMetrics.incrementLookupErrors()
-            throw new RetentionLookupError(`Error during retention period lookup: Got invalid value ${retentionPeriod}`)
+    public async getSessionRetentionDays(teamId: TeamId, sessionId: string): Promise<RetentionDaysResolution> {
+        const resolution = await this.getSessionRetention(teamId, sessionId)
+        if (!resolution.resolved) {
+            return { resolved: false }
         }
+
+        const retentionPeriodDays = RetentionPeriodToDaysMap[resolution.retentionPeriod]
+        if (retentionPeriodDays !== null) {
+            return { resolved: true, retentionPeriodDays }
+        }
+        RetentionServiceMetrics.incrementLookupErrors()
+        return { resolved: false }
     }
 }

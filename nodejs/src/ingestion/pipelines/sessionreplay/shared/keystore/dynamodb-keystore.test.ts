@@ -45,7 +45,7 @@ describe('DynamoDBKeyStore', () => {
         } as unknown as jest.Mocked<KMSClient>
 
         mockRetentionService = {
-            getSessionRetentionDays: jest.fn().mockResolvedValue(30),
+            getSessionRetentionDays: jest.fn().mockResolvedValue({ resolved: true, retentionPeriodDays: 30 }),
         } as unknown as jest.Mocked<RetentionService>
 
         keyStore = new DynamoDBKeyStore(mockDynamoDBClient, mockKMSClient, mockRetentionService)
@@ -106,7 +106,7 @@ describe('DynamoDBKeyStore', () => {
         })
 
         it('should calculate expiration based on retention days', async () => {
-            mockRetentionService.getSessionRetentionDays.mockResolvedValue(90)
+            mockRetentionService.getSessionRetentionDays.mockResolvedValue({ resolved: true, retentionPeriodDays: 90 })
 
             await keyStore.generateKey('session-123', 1)
 
@@ -137,6 +137,13 @@ describe('DynamoDBKeyStore', () => {
             ;(mockDynamoDBClient.send as jest.Mock).mockRejectedValue(new Error('DynamoDB error'))
 
             await expect(keyStore.generateKey('session-123', 1)).rejects.toThrow('DynamoDB error')
+        })
+
+        it('throws without writing a key when retention is unresolved', async () => {
+            mockRetentionService.getSessionRetentionDays.mockResolvedValue({ resolved: false })
+
+            await expect(keyStore.generateKey('session-123', 1)).rejects.toThrow('unresolved retention')
+            expect(mockDynamoDBClient.send).not.toHaveBeenCalled()
         })
     })
 

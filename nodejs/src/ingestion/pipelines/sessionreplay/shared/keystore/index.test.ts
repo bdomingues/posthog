@@ -15,7 +15,7 @@ describe('getKeyStore', () => {
 
     beforeEach(() => {
         mockRetentionService = {
-            getSessionRetentionDays: jest.fn().mockResolvedValue(30),
+            getSessionRetentionDays: jest.fn().mockResolvedValue({ resolved: true, retentionPeriodDays: 30 }),
         } as unknown as jest.Mocked<RetentionService>
     })
 

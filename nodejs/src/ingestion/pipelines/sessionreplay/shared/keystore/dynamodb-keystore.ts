@@ -30,9 +30,14 @@ export class DynamoDBKeyStore implements KeyStore {
     }
 
     async generateKey(sessionId: string, teamId: number): Promise<SessionKey> {
-        const sessionRetentionDays = await this.retentionService.getSessionRetentionDays(teamId, sessionId)
+        const retention = await this.retentionService.getSessionRetentionDays(teamId, sessionId)
+        if (!retention.resolved) {
+            // Without a retention period we can't set the key's expiry; the team's upstream retention
+            // check should mean this is only hit for a team deleted mid-flight.
+            throw new Error(`Cannot generate session key: unresolved retention for session ${sessionId} team ${teamId}`)
+        }
         const createdAt = Math.floor(Date.now() / 1000)
-        const expiresAt = createdAt + sessionRetentionDays * 24 * 60 * 60
+        const expiresAt = createdAt + retention.retentionPeriodDays * 24 * 60 * 60
 
         const { Plaintext, CiphertextBlob } = await this.kmsClient.send(
             new GenerateDataKeyCommand({
