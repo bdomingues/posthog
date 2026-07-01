@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from django.utils import timezone
 
+from posthog.models import User
 from posthog.tasks.process_scheduled_changes import process_scheduled_changes
 
 from products.approvals.backend.models import ApprovalPolicy, ChangeRequest, ChangeRequestState, ValidationStatus
@@ -240,6 +241,34 @@ class TestScheduledChangeGating(APIBaseTest):
         assert scheduled.change_request is None
         old_cr.refresh_from_db()
         assert old_cr.state == ChangeRequestState.EXPIRED
+
+    def test_regate_on_payload_change_gates_as_editing_user_not_creator(self, _mock_enabled):
+        # Re-gating must evaluate as the user making the edit, not the schedule's creator: a creator
+        # with approval bypass would otherwise let any editor PATCH in a gated payload that stays
+        # unbound and applies unapproved. The bound CR is attributed to the editor.
+        self._enable_policy()
+        flag = self._disabled_flag()
+
+        scheduled = self._schedule(
+            flag,
+            {"operation": "update_status", "value": False},
+            timezone.now() + timedelta(hours=1),
+        )
+        assert scheduled.change_request is None
+
+        editor = User.objects.create_and_join(self.organization, "editor@posthog.com", None)
+        self.client.force_login(editor)
+        response = self.client.patch(
+            f"/api/projects/{self.team.id}/scheduled_changes/{scheduled.id}/",
+            {"payload": {"operation": "update_status", "value": True}},
+            format="json",
+        )
+
+        assert response.status_code == 200, response.content
+        scheduled.refresh_from_db()
+        assert scheduled.change_request is not None
+        assert scheduled.change_request.created_by == editor
+        assert scheduled.change_request.created_by != self.user
 
     def test_approved_then_stale_cr_is_not_applied(self, _mock_enabled):
         self._enable_policy()

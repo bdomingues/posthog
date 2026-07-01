@@ -283,8 +283,12 @@ class ScheduledChangeSerializer(serializers.ModelSerializer):
 
         Expires any previously bound pending CR that the new payload no longer needs, so a stale
         request can't be approved into applying a change the row no longer carries.
+
+        Gate as the user making the edit, not the original creator: a creator with approval-bypass
+        would otherwise let any editor PATCH in a gated payload that stays unbound and applies
+        unapproved.
         """
-        new_change_request = gate_scheduled_change(feature_flag, new_payload, instance.created_by)
+        new_change_request = gate_scheduled_change(feature_flag, new_payload, self.context["request"].user)
         existing = instance.change_request
         if (
             existing is not None
