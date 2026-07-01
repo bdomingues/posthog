@@ -226,7 +226,7 @@ async def evaluate_alert(inputs: EvaluateAlertActivityInputs) -> EvaluateAlertRe
             # benign misconfiguration to error tracking as if it were a crash. disable_invalid_alert
             # persists the ERRORED check and sends the "disabled" email itself, so there's nothing more
             # to notify here.
-            logger.warning("Alert id = %s auto-disabled — cannot evaluate as configured: %s", alert.id, err)
+            logger.warning("check_alert.auto_disabling_on_extraction_error", alert_id=alert.id, error=str(err))
             disabled_check = disable_invalid_alert(alert, str(err))
             return EvaluateAlertResult(
                 alert_check_id=str(disabled_check.id),

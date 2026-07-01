@@ -379,6 +379,7 @@ class TestEvaluateAlert:
 
         check = await sync_to_async(AlertCheck.objects.get)(pk=result.alert_check_id)
         assert check.state == AlertState.ERRORED
+        assert check.error is not None
         assert "no data" in check.error["message"]
 
     async def test_evaluate_reraises_ch_transient_error(self, alert) -> None:
