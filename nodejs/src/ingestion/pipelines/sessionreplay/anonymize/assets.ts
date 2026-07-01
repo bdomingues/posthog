@@ -43,30 +43,11 @@ export function hasMediaSrcAttr(attrs: Record<string, unknown>): boolean {
     return MEDIA_SRC_ATTRS.some((name) => Object.prototype.hasOwnProperty.call(attrs, name))
 }
 
-/** True if the bytes start with a known raster-image magic (PNG/JPEG/GIF/WEBP/BMP). The `data:image/…`
- *  header is attacker-controlled, so this rejects a bogus base64 payload that would otherwise be posted
- *  to the topic only to fail decode downstream. rrweb inlines PNG/JPEG/WEBP, all covered here. */
-function looksLikeRasterImage(b: Buffer): boolean {
-    if (b.length < 12) {
-        return false
-    }
-    const png = b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
-    const jpeg = b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff
-    const gif = b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38
-    const webp =
-        b[0] === 0x52 &&
-        b[1] === 0x49 &&
-        b[2] === 0x46 &&
-        b[3] === 0x46 &&
-        b[8] === 0x57 &&
-        b[9] === 0x45 &&
-        b[10] === 0x42 &&
-        b[11] === 0x50
-    const bmp = b[0] === 0x42 && b[1] === 0x4d
-    return png || jpeg || gif || webp || bmp
-}
-
-/** Raw bytes of an image data URI's base64 payload, or null if it isn't a base64 raster image. */
+/** Raw bytes of an image data URI's base64 payload, or null if it isn't a base64 image data URI. We
+ *  don't validate the image FORMAT here on purpose: the consumer's sharp decode is the single authority
+ *  on "is this a real image" (it throws + skips otherwise). Magic-byte filtering would risk false-
+ *  rejecting a real but unlisted format (e.g. AVIF), which returns false below and leaves the raw image
+ *  inline — a PII leak, the wrong failure direction for a scrubber. */
 function imageDataUriBytes(dataUri: string): Buffer | null {
     const comma = dataUri.indexOf(',')
     if (comma < 0) {
@@ -76,8 +57,7 @@ function imageDataUriBytes(dataUri: string): Buffer | null {
     if (!meta.includes('base64') || !meta.startsWith('image/')) {
         return null
     }
-    const bytes = Buffer.from(dataUri.slice(comma + 1), 'base64')
-    return looksLikeRasterImage(bytes) ? bytes : null
+    return Buffer.from(dataUri.slice(comma + 1), 'base64')
 }
 
 /** Coerce an rrweb width/height attribute (number or numeric string) to a positive number, else undefined. */
