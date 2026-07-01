@@ -211,9 +211,9 @@ class TestScheduledChangeGating(APIBaseTest):
         )
 
         assert response.status_code == 200, response.content
-        scheduled.refresh_from_db()
-        assert scheduled.change_request is not None
-        assert scheduled.change_request.state == ChangeRequestState.PENDING
+        reloaded = ScheduledChange.objects.get(id=scheduled.id)
+        assert reloaded.change_request is not None
+        assert reloaded.change_request.state == ChangeRequestState.PENDING
 
     def test_patching_payload_to_ungated_change_expires_stale_cr(self, _mock_enabled):
         # The inverse: a gated schedule repointed at an ungated payload must drop its binding and
