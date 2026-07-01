@@ -14,7 +14,7 @@ from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 from dateutil.relativedelta import relativedelta
 from prometheus_client import Counter
 
-from posthog.approvals.scheduled_changes import apply_gated_scheduled_change, regate_recurring_scheduled_change
+from products.approvals.backend.scheduled_changes import apply_gated_scheduled_change, regate_recurring_scheduled_change
 from posthog.exceptions_capture import capture_exception
 
 from products.feature_flags.backend.models.feature_flag import FeatureFlag

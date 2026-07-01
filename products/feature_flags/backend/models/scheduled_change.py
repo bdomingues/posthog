@@ -57,7 +57,7 @@ class ScheduledChange(RootTeamMixin, models.Model):
     # the change once that CR is approved; if the fire window passes while still pending, the CR
     # is expired and the change is skipped. NULL for ungated schedules (no policy applies).
     change_request = models.ForeignKey(
-        "posthog.ChangeRequest",
+        "approvals.ChangeRequest",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

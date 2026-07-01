@@ -337,11 +337,15 @@ export function createScales(
     const x = createXScale(labels, dimensions)
 
     const positions = orderedAxisPositions(series)
-    const hasMultipleAxes = positions.length > 1
     const axisOverrides = new Map((options.axes ?? []).map((a) => [a.id, a]))
 
-    if (!hasMultipleAxes) {
-        const soleAxisId = positions[0]?.axisId ?? DEFAULT_Y_AXIS_ID
+    // A sole axis explicitly positioned right must still produce a `yAxes` record — otherwise the
+    // scalar fast path below emits no per-axis info and the gutter always renders on the left.
+    const soleAxisId = positions[0]?.axisId ?? DEFAULT_Y_AXIS_ID
+    const soleAxisOnRight = positions.length === 1 && axisOverrides.get(soleAxisId)?.position === 'right'
+    const hasMultipleAxes = positions.length > 1
+
+    if (!hasMultipleAxes && !soleAxisOnRight) {
         const y = createYScale(series, dimensions, {
             scaleType: axisOverrides.get(soleAxisId)?.scaleType ?? options.scaleType,
             percentStack: options.percentStack,
@@ -480,6 +484,27 @@ export function buildSegmentResolveValue(
                 return top - bottom
             }
         }
+        const raw = s.data[dataIndex]
+        return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0
+    }
+}
+
+/** Returns the stacked bottom value for each series — use with {@link buildStackedPositionValue}
+ *  to compute per-segment midpoints for tooltip hover detection. */
+export function buildStackedBottomValue(
+    stackedData: Map<string, StackedBand> | undefined
+): ResolveValueFn | undefined {
+    if (!stackedData) {
+        return undefined
+    }
+    return (s, dataIndex) => {
+        const bottom = stackedData.get(s.key)?.bottom[dataIndex]
+        if (Number.isFinite(bottom)) {
+            return bottom as number
+        }
+        // Non-stacked series (e.g. overlay trend lines) aren't in the stack map.
+        // Fall back to the series value so the midpoint collapses to the series's
+        // own pixel position — matching buildStackedPositionValue's fallback.
         const raw = s.data[dataIndex]
         return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0
     }

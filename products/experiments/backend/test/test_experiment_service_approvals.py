@@ -5,15 +5,15 @@ from unittest.mock import patch
 
 from rest_framework.test import APIRequestFactory
 
-from posthog.approvals.exceptions import ApprovalRequired
-from posthog.approvals.models import ApprovalPolicy, ChangeRequest, ChangeRequestState
+from products.approvals.backend.exceptions import ApprovalRequired
+from products.approvals.backend.models import ApprovalPolicy, ChangeRequest, ChangeRequestState
 from posthog.constants import AvailableFeature
 
 from products.experiments.backend.experiment_service import ExperimentService
 from products.experiments.backend.models.experiment import Experiment
 
 
-@patch("posthog.approvals.decorators._is_approvals_enabled", return_value=True)
+@patch("products.approvals.backend.decorators._is_approvals_enabled", return_value=True)
 class TestExperimentServiceApprovals(APIBaseTest):
     """launch/pause/resume flip the linked flag's `active` state, which must pass through
     the FeatureFlagSerializer approval gate (action `feature_flag.enable`/`feature_flag.disable`)."""
