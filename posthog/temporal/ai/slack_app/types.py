@@ -45,6 +45,9 @@ class PostHogCodeSlackMentionCommandWorkflowInputs:
     # resolve activity. Remove the fallback (and this field's optionality)
     # once the workflow history retention window has elapsed.
     user_id: int | None = None
+    # The invoking surface's prefix, used verbatim in user-facing help/error copy:
+    # ``@PostHog`` for mentions, ``/posthog`` for the slash command.
+    command_prefix: str = "@PostHog"
 
 
 @dataclass

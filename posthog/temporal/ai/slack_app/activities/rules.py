@@ -124,9 +124,10 @@ def handle_posthog_code_slack_mention_command_activity(
 
     event = inputs.event
     channel = event.get("channel")
-    thread_ts = event.get("thread_ts") or event.get("ts")
+    # Empty anchor posts at the channel root — correct for a slash command invoked outside a thread.
+    thread_ts = event.get("thread_ts") or event.get("ts") or ""
     slack_user_id = event.get("user")
-    if not channel or not thread_ts or not slack_user_id:
+    if not channel or not slack_user_id:
         return PostHogCodeSlackMentionCommandResult(status="done")
 
     command = parse_rules_command(event.get("text", ""))
@@ -154,7 +155,7 @@ def handle_posthog_code_slack_mention_command_activity(
         else:
             text = (
                 "This Slack workspace is connected to multiple PostHog projects. "
-                "Use `@PostHog project <id>` to set a default first, then re-run your command."
+                f"Use `{inputs.command_prefix} project <id>` to set a default first, then re-run your command."
             )
         SlackIntegration(candidates[0]).client.chat_postEphemeral(
             channel=channel,
@@ -187,5 +188,6 @@ def handle_posthog_code_slack_mention_command_activity(
         slack_workspace_id=inputs.slack_team_id,
         user_id=user_id,
         workspace_candidates=candidates,
+        command_prefix=inputs.command_prefix,
     )
     return PostHogCodeSlackMentionCommandResult(status="done")
