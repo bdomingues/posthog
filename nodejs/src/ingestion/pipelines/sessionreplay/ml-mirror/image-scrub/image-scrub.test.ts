@@ -18,7 +18,7 @@ function fakeDeps(): {
     const calls = { reserve: 0, release: 0, produce: 0 }
     let produceFails = false
     const deps: ImageScrubEmitDeps = {
-        reserve: (ks, ttl) => {
+        setBatchContentKeysRedis: (ks, ttl) => {
             calls.reserve++
             return Promise.resolve(
                 ks.map((k) => {
@@ -30,12 +30,12 @@ function fakeDeps(): {
                 })
             )
         },
-        release: (ks) => {
+        deleteBatchContentKeysRedis: (ks) => {
             calls.release++
             ks.forEach((k) => keys.delete(k))
             return Promise.resolve()
         },
-        produce: (messages) => {
+        produceBatchImagesKafka: (messages) => {
             calls.produce++
             if (produceFails) {
                 return Promise.reject(new Error('broker down'))

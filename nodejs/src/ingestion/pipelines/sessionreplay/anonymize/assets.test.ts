@@ -9,9 +9,9 @@ const DATA_URI =
 
 // No-op emit deps: these assets-level tests only exercise routing/collection, so the emit is never run.
 const NOOP_PORTS: NonNullable<ScrubContext['imageScrub']> = {
-    reserve: () => Promise.resolve([]),
-    release: () => Promise.resolve(),
-    produce: () => Promise.resolve(),
+    setBatchContentKeysRedis: () => Promise.resolve([]),
+    deleteBatchContentKeysRedis: () => Promise.resolve(),
+    produceBatchImagesKafka: () => Promise.resolve(),
 }
 
 /** A scrub context with the image-scrub topic ports wired. */

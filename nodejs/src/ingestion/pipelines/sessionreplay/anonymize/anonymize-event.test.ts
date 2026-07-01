@@ -156,9 +156,9 @@ describe('anonymize/event router', () => {
         it('emits an advanced <img> to the topic and writes the reference in place', async () => {
             const produced: TopicMessage[] = []
             const imageScrub: ImageScrubEmitDeps = {
-                reserve: (keys) => Promise.resolve(keys.map(() => true)),
-                release: () => Promise.resolve(),
-                produce: (messages) => {
+                setBatchContentKeysRedis: (keys) => Promise.resolve(keys.map(() => true)),
+                deleteBatchContentKeysRedis: () => Promise.resolve(),
+                produceBatchImagesKafka: (messages) => {
                     produced.push(...messages)
                     return Promise.resolve()
                 },
@@ -175,9 +175,9 @@ describe('anonymize/event router', () => {
 
         it('fails closed (drops the message) when the emit throws', async () => {
             const imageScrub: ImageScrubEmitDeps = {
-                reserve: (keys) => Promise.resolve(keys.map(() => true)),
-                release: () => Promise.resolve(),
-                produce: () => Promise.reject(new Error('broker down')),
+                setBatchContentKeysRedis: (keys) => Promise.resolve(keys.map(() => true)),
+                deleteBatchContentKeysRedis: () => Promise.resolve(),
+                produceBatchImagesKafka: () => Promise.reject(new Error('broker down')),
             }
             const { message } = messageWithInlineImage()
 
@@ -189,9 +189,9 @@ describe('anonymize/event router', () => {
         it('falls back to blur (no emit) when no team id is present', async () => {
             const produced: TopicMessage[] = []
             const imageScrub: ImageScrubEmitDeps = {
-                reserve: (keys) => Promise.resolve(keys.map(() => true)),
-                release: () => Promise.resolve(),
-                produce: (messages) => {
+                setBatchContentKeysRedis: (keys) => Promise.resolve(keys.map(() => true)),
+                deleteBatchContentKeysRedis: () => Promise.resolve(),
+                produceBatchImagesKafka: (messages) => {
                     produced.push(...messages)
                     return Promise.resolve()
                 },

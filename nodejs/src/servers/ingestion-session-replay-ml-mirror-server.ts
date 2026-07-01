@@ -128,10 +128,10 @@ export class IngestionSessionReplayMlMirrorServer implements NodeServer {
             const redis = buildSessionReplayRedisV2(this.config)
             const producer = this.producerRegistry.getProducer(INGESTION_SESSIONREPLAY_PRODUCER)
             scrubContext.imageScrub = {
-                // Reserve every key in one pipelined round-trip; 'OK' = fresh (post it), nil = duplicate.
+                // SET NX EX every key in one pipelined round-trip; 'OK' = fresh (post it), nil = duplicate.
                 // No failOpen — a Redis error throws, so the fail-closed pipeline drops the message rather
                 // than record references for images it never confirmed as posted.
-                reserve: async (keys, ttlSeconds) => {
+                setBatchContentKeysRedis: async (keys, ttlSeconds) => {
                     const raw = await redis.usePipeline({ name: 'image_scrub_reserve' }, (pipeline) => {
                         for (const key of keys) {
                             pipeline.set(key, '1', 'EX', ttlSeconds, 'NX')
@@ -139,7 +139,7 @@ export class IngestionSessionReplayMlMirrorServer implements NodeServer {
                     })
                     return (raw ?? []).map(([err, res]) => !err && res === 'OK')
                 },
-                release: async (keys) => {
+                deleteBatchContentKeysRedis: async (keys) => {
                     await redis.usePipeline({ name: 'image_scrub_release' }, (pipeline) => {
                         for (const key of keys) {
                             pipeline.del(key)
@@ -147,7 +147,7 @@ export class IngestionSessionReplayMlMirrorServer implements NodeServer {
                     })
                 },
                 // One produce per fresh image; resolves once the broker acks them all.
-                produce: async (messages) => {
+                produceBatchImagesKafka: async (messages) => {
                     await Promise.all(
                         messages.map((m) =>
                             producer.produce({

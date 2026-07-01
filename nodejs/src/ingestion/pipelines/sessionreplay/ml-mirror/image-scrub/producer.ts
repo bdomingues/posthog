@@ -31,12 +31,14 @@ export interface ImageInput {
 
 /** Injected side-effects: batched Redis reserve/release + a batched topic produce. */
 export interface ImageScrubEmitDeps {
-    /** Reserve keys in one round-trip; returns per-key whether it was fresh (true = post it). */
-    reserve: (keys: string[], ttlSeconds: number) => Promise<boolean[]>
-    /** Release reservations in one round-trip (rollback of a failed produce). */
-    release: (keys: string[]) => Promise<void>
-    /** Post all messages; resolves only once the broker has acked them. */
-    produce: (messages: TopicMessage[]) => Promise<void>
+    /** SET NX EX a batch of content-hash keys in Redis, in one round-trip. Returns, per key in order,
+     *  whether it was newly set (true = first sighting within the TTL, so post it; false = a recent or
+     *  in-batch duplicate). */
+    setBatchContentKeysRedis: (keys: string[], ttlSeconds: number) => Promise<boolean[]>
+    /** DEL a batch of content-hash keys in Redis — rolls the reservations back after a failed produce. */
+    deleteBatchContentKeysRedis: (keys: string[]) => Promise<void>
+    /** Produce a batch of raw-image messages to the scrub topic; resolves once the broker acks them. */
+    produceBatchImagesKafka: (messages: TopicMessage[]) => Promise<void>
     ttlSeconds?: number
 }
 
@@ -62,7 +64,7 @@ export async function emitImagesForScrub(images: ImageInput[], deps: ImageScrubE
     const refs = images.map((img) => imageRef(img.teamId, hashImageBytes(img.bytes)))
     const ttl = deps.ttlSeconds ?? DEDUP_TTL_SECONDS
 
-    const fresh = await deps.reserve(refs, ttl) // one round-trip
+    const fresh = await deps.setBatchContentKeysRedis(refs, ttl) // one round-trip
 
     const toPost: TopicMessage[] = []
     for (let i = 0; i < images.length; i++) {
@@ -72,12 +74,12 @@ export async function emitImagesForScrub(images: ImageInput[], deps: ImageScrubE
     }
     if (toPost.length > 0) {
         try {
-            await deps.produce(toPost) // one send
+            await deps.produceBatchImagesKafka(toPost) // one send
         } catch (err) {
             // Roll back the reservations so later sightings retry; if the rollback itself fails (Redis
             // down) the keys sit until the TTL and dedup those images away — meter it so it's visible.
             await deps
-                .release(toPost.map((m) => m.key))
+                .deleteBatchContentKeysRedis(toPost.map((m) => m.key))
                 .catch(() => ImageScrubMetrics.incrementReservationRollbackFailure())
             throw err
         }
