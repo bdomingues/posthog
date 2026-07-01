@@ -92,7 +92,7 @@ jobs:
               with:
                   context: .
                   buildx-fallback: false
-                  # Depot project "replay-vision-ingestion-image-scrubber".
+                  # Depot project "replay-vision-ingestion-ml-mirror-image-scrub".
                   project: 'hmrgpk84ch'
                   push: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' || vars.CD_DEPLOY_ENABLED == 'true' }}
                   file: Dockerfile.ml-mirror-image-scrub
