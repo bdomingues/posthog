@@ -126,14 +126,13 @@ describe('RetentionService', () => {
             expect(RetentionServiceMetrics.incrementLookupErrors).toHaveBeenCalledTimes(1)
         })
 
-        it('marks a session unresolvable when the cached value is invalid', async () => {
+        it('throws on a corrupt cached retention value', async () => {
             mockRedisClient.mget = jest.fn().mockResolvedValue(['foobar'])
 
-            const results = await retentionService.resolveSessionRetentions(sessionSet([1, 'a']))
-
-            expect(results.get(1, 'a')).toEqual({ resolved: false })
+            await expect(retentionService.resolveSessionRetentions(sessionSet([1, 'a']))).rejects.toThrow(
+                "Invalid cached retention value 'foobar' for team 1 session a"
+            )
             expect(mockTeamService.getRetentionPeriodByTeamId).not.toHaveBeenCalled()
-            expect(RetentionServiceMetrics.incrementLookupErrors).toHaveBeenCalledTimes(1)
         })
 
         it('keys each result by (teamId, sessionId) for a mix of hits and misses', async () => {

@@ -55,8 +55,10 @@ export class RetentionService {
                 } else if (isValidRetentionPeriod(value)) {
                     resolutions.set(teamId, sessionId, { resolved: true, retentionPeriod: value })
                 } else {
-                    RetentionServiceMetrics.incrementLookupErrors()
-                    resolutions.set(teamId, sessionId, { resolved: false })
+                    // A retention value the cache should never hold — crash rather than record with a
+                    // wrong retention. Thrown without isRetriable so it propagates and takes the
+                    // consumer down (same stance as an invalid value from Postgres).
+                    throw new Error(`Invalid cached retention value '${value}' for team ${teamId} session ${sessionId}`)
                 }
             }
 
