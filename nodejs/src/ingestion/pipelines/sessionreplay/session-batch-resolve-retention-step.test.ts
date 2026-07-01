@@ -1,16 +1,12 @@
 import { AccumulationContext } from '~/ingestion/framework/accumulating-pipeline'
 import { isOkResult } from '~/ingestion/framework/results'
-import {
-    RetentionLookupError,
-    RetentionService,
-} from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
+import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 
 import { createResolveRetentionStep } from './session-batch-resolve-retention-step'
 import { SessionBatchMetrics } from './sessions/metrics'
 import { SessionBatchContext, SessionBatchRecorder } from './sessions/session-batch-recorder'
 
 jest.mock('~/common/utils/logger', () => ({ logger: { warn: jest.fn() } }))
-jest.mock('~/common/utils/posthog', () => ({ captureException: jest.fn() }))
 jest.mock('./sessions/metrics', () => ({
     SessionBatchMetrics: { incrementSessionsDroppedDuringFlush: jest.fn() },
 }))
@@ -29,11 +25,14 @@ describe('createResolveRetentionStep', () => {
 
     beforeEach(() => {
         jest.clearAllMocks()
-        mockRetentionService = { getSessionRetention: jest.fn() } as unknown as jest.Mocked<RetentionService>
+        mockRetentionService = { resolveSessionRetentions: jest.fn() } as unknown as jest.Mocked<RetentionService>
     })
 
     it('resolves retention for every pending session into the map', async () => {
-        mockRetentionService.getSessionRetention.mockResolvedValueOnce('30d').mockResolvedValueOnce('1y')
+        mockRetentionService.resolveSessionRetentions.mockResolvedValue([
+            { resolved: true, retentionPeriod: '30d' },
+            { resolved: true, retentionPeriod: '1y' },
+        ])
         const step = createResolveRetentionStep(mockRetentionService)
 
         const result = await step(
@@ -45,19 +44,18 @@ describe('createResolveRetentionStep', () => {
 
         expect(isOkResult(result)).toBe(true)
         if (isOkResult(result)) {
-            expect(result.value.retentionByKey).toEqual(
-                new Map([
-                    ['1$a', '30d'],
-                    ['2$b', '1y'],
-                ])
-            )
+            expect(result.value.retentionMap.get(1, 'a')).toBe('30d')
+            expect(result.value.retentionMap.get(2, 'b')).toBe('1y')
+            expect(result.value.retentionMap.size).toBe(2)
         }
+        expect(SessionBatchMetrics.incrementSessionsDroppedDuringFlush).not.toHaveBeenCalled()
     })
 
-    it('drops a session on a non-retriable RetentionLookupError and keeps the rest', async () => {
-        mockRetentionService.getSessionRetention
-            .mockRejectedValueOnce(new RetentionLookupError('Unknown team id 999'))
-            .mockResolvedValueOnce('90d')
+    it('drops an unresolvable session and keeps the rest', async () => {
+        mockRetentionService.resolveSessionRetentions.mockResolvedValue([
+            { resolved: false },
+            { resolved: true, retentionPeriod: '90d' },
+        ])
         const step = createResolveRetentionStep(mockRetentionService)
 
         const result = await step(
@@ -70,13 +68,15 @@ describe('createResolveRetentionStep', () => {
         expect(isOkResult(result)).toBe(true)
         if (isOkResult(result)) {
             // the deleted team's session is left out of the map (the write step will skip it)
-            expect(result.value.retentionByKey).toEqual(new Map([['2$ok', '90d']]))
+            expect(result.value.retentionMap.get(999, 'gone')).toBeUndefined()
+            expect(result.value.retentionMap.get(2, 'ok')).toBe('90d')
+            expect(result.value.retentionMap.size).toBe(1)
         }
         expect(SessionBatchMetrics.incrementSessionsDroppedDuringFlush).toHaveBeenCalledTimes(1)
     })
 
-    it('rethrows a transient (retriable) error so the retry wrapper can retry the whole step', async () => {
-        mockRetentionService.getSessionRetention.mockRejectedValue(new Error('Redis connection lost'))
+    it('propagates a transient failure so the retry wrapper can retry the whole step', async () => {
+        mockRetentionService.resolveSessionRetentions.mockRejectedValue(new Error('Redis connection lost'))
         const step = createResolveRetentionStep(mockRetentionService)
 
         await expect(step(batchContextWith([{ teamId: 1, sessionId: 'a' }]))).rejects.toThrow('Redis connection lost')

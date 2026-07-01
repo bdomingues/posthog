@@ -4,9 +4,9 @@ import { validate as uuidValidate } from 'uuid'
 import { parseJSON } from '~/common/utils/json-parse'
 import { KafkaOffsetManager } from '~/ingestion/pipelines/sessionreplay/kafka/offset-manager'
 import { ParsedMessageData, SnapshotEvent } from '~/ingestion/pipelines/sessionreplay/kafka/types'
-import { RetentionPeriod } from '~/ingestion/pipelines/sessionreplay/shared/constants'
 import { SessionFeatureStore } from '~/ingestion/pipelines/sessionreplay/shared/features/session-feature-store'
 import { SessionMetadataStore } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-metadata-store'
+import { RetentionMap } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-map'
 import { createMockEncryptor, createMockKeyStore } from '~/ingestion/pipelines/sessionreplay/shared/test-helpers'
 import { KeyStore, RecordingEncryptor } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { MessageWithTeam } from '~/ingestion/pipelines/sessionreplay/teams/types'
@@ -22,10 +22,11 @@ import { EndResult, SnappySessionRecorder } from './snappy-session-recorder'
 // Resolves every buffered session to 30d and flushes — the retention resolution now happens upstream
 // (in the resolve-retention flush step), so tests exercising the recorder hand it a ready-made map.
 function flushRecorder(recorder: SessionBatchRecorder) {
-    const retentionByKey = new Map<string, RetentionPeriod>(
-        recorder.getPendingSessions().map(({ teamId, sessionId }) => [`${teamId}$${sessionId}`, '30d'])
-    )
-    return recorder.flushToStorage(retentionByKey)
+    const retentionMap = new RetentionMap()
+    for (const { teamId, sessionId } of recorder.getPendingSessions()) {
+        retentionMap.set(teamId, sessionId, '30d')
+    }
+    return recorder.flushToStorage(retentionMap)
 }
 
 // RRWeb event type constants
@@ -428,7 +429,9 @@ describe('SessionBatchRecorder', () => {
             )
 
             // Only session1's retention resolved; session2 was dropped (e.g. deleted team).
-            const metadata = await recorder.flushToStorage(new Map<string, RetentionPeriod>([['1$session1', '30d']]))
+            const retentionMap = new RetentionMap()
+            retentionMap.set(1, 'session1', '30d')
+            const metadata = await recorder.flushToStorage(retentionMap)
 
             expect(mockWriter.writeSession).toHaveBeenCalledTimes(1)
             expect(mockWriter.writeSession).toHaveBeenCalledWith(
@@ -458,12 +461,10 @@ describe('SessionBatchRecorder', () => {
                 ])
             )
 
-            await recorder.flushToStorage(
-                new Map<string, RetentionPeriod>([
-                    ['1$session1', '30d'],
-                    ['1$session2', '1y'],
-                ])
-            )
+            const retentionMap = new RetentionMap()
+            retentionMap.set(1, 'session1', '30d')
+            retentionMap.set(1, 'session2', '1y')
+            await recorder.flushToStorage(retentionMap)
 
             expect(mockWriter.writeSession).toHaveBeenCalledWith(
                 expect.objectContaining({ sessionId: 'session1', retentionPeriod: '30d' })

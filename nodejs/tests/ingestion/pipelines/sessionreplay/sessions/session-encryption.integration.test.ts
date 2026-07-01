@@ -13,20 +13,21 @@ import { SessionBatchRecorder } from '~/ingestion/pipelines/sessionreplay/sessio
 import { SessionConsoleLogStore } from '~/ingestion/pipelines/sessionreplay/sessions/session-console-log-store'
 import { SessionFilter } from '~/ingestion/pipelines/sessionreplay/sessions/session-filter'
 import { SessionTracker } from '~/ingestion/pipelines/sessionreplay/sessions/session-tracker'
-import { RetentionPeriod } from '~/ingestion/pipelines/sessionreplay/shared/constants'
 import { SodiumRecordingDecryptor, SodiumRecordingEncryptor } from '~/ingestion/pipelines/sessionreplay/shared/crypto'
 import { SessionFeatureStore } from '~/ingestion/pipelines/sessionreplay/shared/features/session-feature-store'
 import { MemoryKeyStore } from '~/ingestion/pipelines/sessionreplay/shared/keystore'
 import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
 import { SessionMetadataStore } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-metadata-store'
+import { RetentionMap } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-map'
 import { SessionKeyDeletedError } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { MessageWithTeam } from '~/ingestion/pipelines/sessionreplay/teams/types'
 
 function flushRecorder(recorder: SessionBatchRecorder) {
-    const retentionByKey = new Map<string, RetentionPeriod>(
-        recorder.getPendingSessions().map(({ teamId, sessionId }) => [`${teamId}$${sessionId}`, '30d'])
-    )
-    return recorder.flushToStorage(retentionByKey)
+    const retentionMap = new RetentionMap()
+    for (const { teamId, sessionId } of recorder.getPendingSessions()) {
+        retentionMap.set(teamId, sessionId, '30d')
+    }
+    return recorder.flushToStorage(retentionMap)
 }
 
 jest.mock('~/ingestion/pipelines/sessionreplay/sessions/session-feature-recorder', () => ({

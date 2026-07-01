@@ -45,22 +45,22 @@ export interface SessionReplayPipelineOutput {
  * folds events into.
  */
 export type SessionReplayRecordPipeline = BatchPipeline<
-    SessionReplayPipelineInput & SessionBatchContext & AccumulationContext,
-    SessionReplayPipelineOutput,
-    { message: Message },
-    { message: Message },
-    OverflowOutput
+    SessionReplayPipelineInput & SessionBatchContext & AccumulationContext, // TInput: element in (raw input + batch recorder + batch id)
+    SessionReplayPipelineOutput, // TOutput: element out of the record pipeline
+    { message: Message }, // CInput: per-element context in (the Kafka message)
+    { message: Message }, // COutput: per-element context out (the Kafka message)
+    OverflowOutput // R: redirect output names this pipeline can emit
 >
 
 export type SessionReplayAccumulatingPipeline = AccumulatingPipeline<
-    SessionReplayPipelineInput,
-    SessionReplayPipelineOutput,
-    { message: Message },
-    { message: Message },
-    SessionBatchContext,
-    SessionBlockMetadata[],
-    Record<string, never>,
-    OverflowOutput
+    SessionReplayPipelineInput, // TRecordIn: element fed in per message (batch context is added internally)
+    SessionReplayPipelineOutput, // TRecordOut: element out of the record pipeline
+    { message: Message }, // CRecordIn: record-pipeline context in (the Kafka message)
+    { message: Message }, // CRecordOut: record-pipeline context out (the Kafka message)
+    SessionBatchContext, // CBatch: batch context minted per cycle (the recorder), tagged on every element and the flush unit
+    SessionBlockMetadata[], // TFlushOut: element out of the flush pipeline (written block metadata)
+    Record<string, never>, // CFlushOut: flush-pipeline context out (empty — the flush unit carries no context)
+    OverflowOutput // R: redirect output names this pipeline can emit
 >
 
 export interface SessionReplayAccumulatingPipelineConfig {

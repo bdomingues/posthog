@@ -21,13 +21,18 @@ jest.mock('~/ingestion/pipelines/sessionreplay/sessions/metrics', () => ({
 describe('RetentionService', () => {
     let retentionService: RetentionService
     let mockRedisClient: jest.Mocked<Redis>
+    let mockPipeline: { set: jest.Mock; exec: jest.Mock }
+    let mockTeamService: jest.Mocked<TeamService>
 
     beforeEach(() => {
         jest.useFakeTimers()
 
+        mockPipeline = { set: jest.fn().mockReturnThis(), exec: jest.fn().mockResolvedValue([]) }
         mockRedisClient = {
             get: jest.fn().mockResolvedValue(null),
             set: jest.fn(),
+            mget: jest.fn().mockResolvedValue([]),
+            pipeline: jest.fn().mockReturnValue(mockPipeline),
         } as unknown as jest.Mocked<Redis>
 
         const mockRedisPool = {
@@ -35,7 +40,7 @@ describe('RetentionService', () => {
             release: jest.fn(),
         } as unknown as jest.Mocked<RedisPool>
 
-        const mockTeamService = {
+        mockTeamService = {
             getRetentionPeriodByTeamId: jest.fn().mockImplementation((teamId: TeamId) => {
                 return {
                     1: '30d', // Valid
@@ -116,6 +121,94 @@ describe('RetentionService', () => {
                 'EX',
                 24 * 60 * 60
             )
+        })
+    })
+
+    describe('resolveSessionRetentions', () => {
+        it('returns [] without touching Redis for an empty batch', async () => {
+            const results = await retentionService.resolveSessionRetentions([])
+            expect(results).toEqual([])
+            expect(mockRedisClient.mget).not.toHaveBeenCalled()
+        })
+
+        it('resolves cached hits in one MGET without hitting Postgres', async () => {
+            mockRedisClient.mget = jest.fn().mockResolvedValue(['30d', '1y'])
+
+            const results = await retentionService.resolveSessionRetentions([
+                { teamId: 1, sessionId: 'a' },
+                { teamId: 2, sessionId: 'b' },
+            ])
+
+            expect(results).toEqual([
+                { resolved: true, retentionPeriod: '30d' },
+                { resolved: true, retentionPeriod: '1y' },
+            ])
+            expect(mockRedisClient.mget).toHaveBeenCalledTimes(1)
+            expect(mockRedisClient.mget).toHaveBeenCalledWith([
+                '@posthog/replay/session-retention-a',
+                '@posthog/replay/session-retention-b',
+            ])
+            expect(mockTeamService.getRetentionPeriodByTeamId).not.toHaveBeenCalled()
+            expect(mockPipeline.set).not.toHaveBeenCalled()
+        })
+
+        it('falls back to Postgres for misses, deduped per team, and caches the result', async () => {
+            mockRedisClient.mget = jest.fn().mockResolvedValue([null, null])
+
+            const results = await retentionService.resolveSessionRetentions([
+                { teamId: 1, sessionId: 'a' },
+                { teamId: 1, sessionId: 'b' },
+            ])
+
+            expect(results).toEqual([
+                { resolved: true, retentionPeriod: '30d' },
+                { resolved: true, retentionPeriod: '30d' },
+            ])
+            // Two same-team misses → one Postgres lookup.
+            expect(mockTeamService.getRetentionPeriodByTeamId).toHaveBeenCalledTimes(1)
+            // Both resolved values are written back to Redis with a TTL.
+            expect(mockPipeline.set).toHaveBeenCalledTimes(2)
+            expect(mockPipeline.set).toHaveBeenCalledWith(
+                '@posthog/replay/session-retention-a',
+                '30d',
+                'EX',
+                24 * 60 * 60
+            )
+            expect(mockPipeline.exec).toHaveBeenCalledTimes(1)
+        })
+
+        it('marks a session unresolvable (not thrown) when its team has no retention', async () => {
+            mockRedisClient.mget = jest.fn().mockResolvedValue([null])
+
+            const results = await retentionService.resolveSessionRetentions([{ teamId: 3, sessionId: 'gone' }])
+
+            expect(results).toEqual([{ resolved: false }])
+            expect(mockPipeline.set).not.toHaveBeenCalled()
+            expect(RetentionServiceMetrics.incrementLookupErrors).toHaveBeenCalledTimes(1)
+        })
+
+        it('marks a session unresolvable when the cached value is invalid', async () => {
+            mockRedisClient.mget = jest.fn().mockResolvedValue(['foobar'])
+
+            const results = await retentionService.resolveSessionRetentions([{ teamId: 1, sessionId: 'a' }])
+
+            expect(results).toEqual([{ resolved: false }])
+            expect(mockTeamService.getRetentionPeriodByTeamId).not.toHaveBeenCalled()
+            expect(RetentionServiceMetrics.incrementLookupErrors).toHaveBeenCalledTimes(1)
+        })
+
+        it('keeps results aligned with input order for a mix of hits and misses', async () => {
+            mockRedisClient.mget = jest.fn().mockResolvedValue(['1y', null])
+
+            const results = await retentionService.resolveSessionRetentions([
+                { teamId: 2, sessionId: 'cached' },
+                { teamId: 1, sessionId: 'miss' },
+            ])
+
+            expect(results).toEqual([
+                { resolved: true, retentionPeriod: '1y' },
+                { resolved: true, retentionPeriod: '30d' },
+            ])
         })
     })
 

@@ -3,13 +3,13 @@ import { v7 as uuidv7 } from 'uuid'
 import { logger } from '~/common/utils/logger'
 import { captureException } from '~/common/utils/posthog'
 import { KafkaOffsetManager } from '~/ingestion/pipelines/sessionreplay/kafka/offset-manager'
-import { RetentionPeriod } from '~/ingestion/pipelines/sessionreplay/shared/constants'
 import {
     SessionFeatureBlock,
     SessionFeatureStore,
 } from '~/ingestion/pipelines/sessionreplay/shared/features/session-feature-store'
 import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
 import { SessionMetadataSink } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-metadata-store'
+import { RetentionMap } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-map'
 import { KeyStore, RecordingEncryptor, SessionKey } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { MessageWithTeam } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { TeamId } from '~/types'
@@ -302,10 +302,10 @@ export class SessionBatchRecorder {
      * metrics recorded by later flush-pipeline steps, not here — the recorder owns the storage write,
      * not the Kafka offset lifecycle.
      *
-     * @param retentionByKey - Retention period per `${teamId}$${sessionId}`, resolved upstream.
+     * @param retentionMap - Resolved retention per session, keyed by team + session, from upstream.
      * @throws If the flush operation fails
      */
-    public async flushToStorage(retentionByKey: Map<string, RetentionPeriod>): Promise<SessionBlockMetadata[]> {
+    public async flushToStorage(retentionMap: RetentionMap): Promise<SessionBlockMetadata[]> {
         logger.info('🔁', 'session_batch_recorder_flushing', {
             partitions: this.partitionSessions.size,
             totalSize: this._size,
@@ -336,8 +336,9 @@ export class SessionBatchRecorder {
                 ] of sessions.values()) {
                     // Skip sessions the resolve-retention step dropped (e.g. deleted team) — their
                     // offsets still commit, so the poison session doesn't wedge the batch.
-                    const retentionPeriod = retentionByKey.get(
-                        `${sessionBlockRecorder.teamId}$${sessionBlockRecorder.sessionId}`
+                    const retentionPeriod = retentionMap.get(
+                        sessionBlockRecorder.teamId,
+                        sessionBlockRecorder.sessionId
                     )
                     if (retentionPeriod === undefined) {
                         continue
