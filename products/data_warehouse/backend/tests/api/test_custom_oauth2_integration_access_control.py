@@ -149,3 +149,23 @@ class TestCustomOAuth2IntegrationAccessControl(APIBaseTest):
         assert response.status_code == status.HTTP_403_FORBIDDEN
         reloaded = CustomOAuth2Integration.objects.for_team(self.team.pk).get(id=self.allowed_integration.id)
         assert str(reloaded.external_data_source_id) == str(self.allowed_source.id)
+
+    def test_unlinked_integration_visible_only_to_its_creator(self, _mock):
+        # An unlinked integration is a floating credential: only its creator may see it, so a teammate can't
+        # list its UUID and adopt it into a source they control.
+        mine = CustomOAuth2Integration.objects.for_team(self.team.pk).create(
+            team=self.team,
+            created_by=self.member,
+            config={"client_id": "x", "token_url": "https://auth.example.com/token"},
+            sensitive_config={"client_secret": "s"},
+        )
+
+        # A different user can neither list nor retrieve the member's unlinked integration.
+        self.client.force_login(self.user)
+        listed = self.client.get(self._url())
+        assert str(mine.id) not in {row["id"] for row in listed.json()["results"]}
+        assert self.client.get(self._url(f"{mine.id}/")).status_code == status.HTTP_404_NOT_FOUND
+
+        # Its creator sees it.
+        self.client.force_login(self.member)
+        assert self.client.get(self._url(f"{mine.id}/")).status_code == status.HTTP_200_OK

@@ -95,6 +95,19 @@ class TestCustomOAuth2IntegrationAPI(APIBaseTest):
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "token_url" in str(response.json())
 
+    @parameterized.expand(
+        [
+            ("extra_params", {"extra_token_request_params": {"client_secret": "leak"}}),
+            ("headers", {"token_request_headers": {"Authorization": "Bearer leak"}}),
+        ]
+    )
+    def test_rejects_secrets_in_config_knobs(self, _mock, _name, knob):
+        # config round-trips to source viewers, so a secret hidden in the provider-knob dicts must be
+        # rejected — the same rule the custom manifest validator applies.
+        response = self.client.post(self._url(), self._create_payload(**knob), format="json")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "must not be stored here" in str(response.json())
+
     def test_cannot_read_another_teams_integration(self, _mock):
         other_team = self.create_team_with_organization(self.organization)
         other = CustomOAuth2Integration.objects.for_team(other_team.pk).create(

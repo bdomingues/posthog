@@ -30,6 +30,21 @@ custom_oauth2_integration_credential_counter = Counter(
 _GRANT_TYPE_CHOICES = [("client_credentials", "client_credentials"), ("refresh_token", "refresh_token")]
 _CLIENT_AUTH_METHOD_CHOICES = [("body", "body"), ("basic", "basic")]
 
+# Keys a secret could hide under, mirroring the custom manifest's INLINE_SECRET_KEYS (+ `authorization`
+# for header dicts). `config` round-trips to anyone who can read the integration, so a secret stashed in
+# the provider-knob dicts below would leak to a source viewer — reject it here like the manifest does.
+_SECRET_LIKE_KEYS = ("token", "api_key", "password", "client_secret", "refresh_token", "access_token", "authorization")
+
+
+def _reject_secret_like_keys(value: dict[str, Any]) -> dict[str, Any]:
+    lowered = {str(key).lower(): val for key, val in value.items()}
+    leaked = [key for key in _SECRET_LIKE_KEYS if lowered.get(key)]
+    if leaked:
+        raise serializers.ValidationError(
+            f"Credentials ({', '.join(leaked)}) must not be stored here — use client_secret / refresh_token."
+        )
+    return value
+
 
 class CustomOAuth2ConfigSerializer(serializers.Serializer):
     """The non-secret OAuth2 client config — the exact knobs the worker's OAuth2 auth engine accepts.
@@ -101,6 +116,12 @@ class CustomOAuth2ConfigSerializer(serializers.Serializer):
         if not allowed:
             raise serializers.ValidationError(reason or "token_url is not an allowed destination.")
         return value
+
+    def validate_extra_token_request_params(self, value: dict[str, Any]) -> dict[str, Any]:
+        return _reject_secret_like_keys(value)
+
+    def validate_token_request_headers(self, value: dict[str, Any]) -> dict[str, Any]:
+        return _reject_secret_like_keys(value)
 
 
 class CustomOAuth2IntegrationSerializer(serializers.ModelSerializer):
@@ -289,13 +310,14 @@ class CustomOAuth2IntegrationViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewS
         # `scope_object = "external_data_source"` but this serves CustomOAuth2Integration rows, which aren't
         # in the RBAC model→resource map — so object-level checks no-op and a user with access to ANY source
         # could otherwise see every integration in the team. Gate each integration on its linked source's
-        # visibility instead. Unlinked rows (the brief create→link window) stay team-visible since they
-        # don't yet back a restricted source.
+        # visibility instead. Unlinked rows (the brief create→link window) are floating credentials, so they
+        # stay visible only to their creator — otherwise a teammate could list one and adopt its UUID.
         accessible_sources = self.user_access_control.filter_queryset_by_access_level(
             ExternalDataSource.objects.filter(team_id=self.team_id)
         )
         queryset = queryset.filter(
-            Q(external_data_source__isnull=True) | Q(external_data_source__in=accessible_sources)
+            Q(external_data_source__isnull=True, created_by=self.request.user)
+            | Q(external_data_source__in=accessible_sources)
         )
         return queryset.order_by(self.ordering)
 
