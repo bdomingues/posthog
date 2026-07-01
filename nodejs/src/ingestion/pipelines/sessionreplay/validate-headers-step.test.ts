@@ -24,6 +24,21 @@ describe('createValidateSessionReplayHeadersStep', () => {
         }
     })
 
+    it('normalizes a UUID session_id to its canonical (lowercase) form', async () => {
+        const result = await step({
+            headers: createTestEventHeaders({
+                token: 'tok',
+                session_id: '0192E72A-1DD2-7714-8000-8B3E4C123456',
+                distinct_id: 'user-1',
+            }),
+        })
+
+        expect(isOkResult(result)).toBe(true)
+        if (isOkResult(result)) {
+            expect(result.value.headers.session_id).toBe('0192e72a-1dd2-7714-8000-8b3e4c123456')
+        }
+    })
+
     it('DLQs when the token header is missing (capture always sets it, so absence is a bug)', async () => {
         const result = await step({ headers: createTestEventHeaders({ session_id: 'sess-1', distinct_id: 'user-1' }) })
 

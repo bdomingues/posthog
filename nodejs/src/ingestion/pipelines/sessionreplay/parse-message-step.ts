@@ -192,8 +192,9 @@ export function createParseMessageStep<T extends ParseMessageStepInput>(): Proce
 
         // session_id and distinct_id are carried both in the headers (set by capture) and in the
         // message body; they must agree — a mismatch means the message is corrupt or mis-routed.
+        // headers.session_id is already normalized by the validate step, matching the body's.
         const { headers } = input
-        if (normalizeSessionId(headers.session_id) !== sessionId) {
+        if (headers.session_id !== sessionId) {
             return dlq('session_id_header_body_mismatch')
         }
         if (headers.distinct_id !== messageResult.data.distinct_id) {

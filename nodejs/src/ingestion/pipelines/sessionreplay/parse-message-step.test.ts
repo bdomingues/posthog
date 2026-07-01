@@ -576,13 +576,14 @@ describe('createParseMessageStep', () => {
             ],
             distinctId: 'user-123',
         })
+        // The header id is already normalized by the validate step; the body carries the raw id.
         const input = createInput(
             0,
             1,
             payload,
             undefined,
             undefined,
-            createReplayHeaders({ session_id: inputSessionId })
+            createReplayHeaders({ session_id: expectedSessionId })
         )
 
         const result = await step(input)
