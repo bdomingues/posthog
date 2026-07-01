@@ -190,67 +190,73 @@ class TestSlackAgentPermissionPrompt(TestCase):
         assert card["type"] == "card"
         assert len(card["body"]["text"]) <= 200
 
-    @patch("products.tasks.backend.temporal.client.signal_task_permission_response")
+    @patch("products.tasks.backend.facade.api.send_permission_response")
+    @patch("products.tasks.backend.facade.api.create_sandbox_connection_token", return_value="sandbox-token")
     @patch("products.slack_app.backend.api.resolve_slack_user")
     @patch("products.slack_app.backend.services.agent_permissions.SlackIntegration")
     def test_safe_posthog_tool_is_auto_approved_without_prompt(
         self,
         mock_slack_cls: MagicMock,
         mock_resolve_slack_user: MagicMock,
-        mock_signal_permission_response: MagicMock,
+        mock_create_token: MagicMock,
+        mock_send_permission_response: MagicMock,
     ) -> None:
         event = self._posthog_exec_permission_event("tasks-runs-living-artifacts-create")
         mock_resolve_slack_user.return_value = SimpleNamespace(user=self.user, slack_email=self.user.email)
+        mock_send_permission_response.return_value = SimpleNamespace(success=True, status_code=200, error=None)
 
         handle_slack_permission_request_for_task_run(self.task_run, event)
 
         mock_slack_cls.return_value.client.chat_postMessage.assert_not_called()
-        mock_signal_permission_response.assert_called_once_with(
-            self.task_run.workflow_id,
+        mock_create_token.assert_called_once_with(
+            str(self.task_run.id), user_id=self.user.id, distinct_id=self.user.distinct_id
+        )
+        mock_send_permission_response.assert_called_once_with(
+            str(self.task_run.id),
             request_id="perm-1",
             option_id="allow",
-            actor_user_id=self.user.id,
-            actor_slack_user_id="U_ACTOR",
-            broker_reason="destructive_policy_auto_allow",
+            auth_token="sandbox-token",
         )
 
-    @patch("products.tasks.backend.temporal.client.signal_task_permission_response")
+    @patch("products.tasks.backend.facade.api.send_permission_response")
     @patch("products.slack_app.backend.services.agent_permissions.SlackIntegration")
     def test_posts_prompt_for_destructive_posthog_tool(
         self,
         mock_slack_cls: MagicMock,
-        mock_signal_permission_response: MagicMock,
+        mock_send_permission_response: MagicMock,
     ) -> None:
         event = self._posthog_exec_permission_event("skill-file-delete")
 
         handle_slack_permission_request_for_task_run(self.task_run, event)
 
-        mock_signal_permission_response.assert_not_called()
+        mock_send_permission_response.assert_not_called()
         mock_slack_cls.return_value.client.chat_postMessage.assert_called_once()
 
-    @patch("products.tasks.backend.temporal.client.signal_task_permission_response")
+    @patch("products.tasks.backend.facade.api.send_permission_response")
     @patch("products.slack_app.backend.services.agent_permissions.SlackIntegration")
     def test_posts_prompt_for_destructive_shell_command(
         self,
         mock_slack_cls: MagicMock,
-        mock_signal_permission_response: MagicMock,
+        mock_send_permission_response: MagicMock,
     ) -> None:
         event = self._permission_event()
         event["toolCall"]["rawInput"]["command"] = "rm -rf report.xlsx"
 
         handle_slack_permission_request_for_task_run(self.task_run, event)
 
-        mock_signal_permission_response.assert_not_called()
+        mock_send_permission_response.assert_not_called()
         mock_slack_cls.return_value.client.chat_postMessage.assert_called_once()
 
-    @patch("products.tasks.backend.temporal.client.signal_task_permission_response")
+    @patch("products.tasks.backend.facade.api.send_permission_response")
+    @patch("products.tasks.backend.facade.api.create_sandbox_connection_token", return_value="sandbox-token")
     @patch("products.slack_app.backend.api.resolve_slack_user")
     @patch("products.slack_app.backend.services.agent_permissions.SlackIntegration")
     def test_safe_shell_command_is_auto_approved_without_prompt(
         self,
         mock_slack_cls: MagicMock,
         mock_resolve_slack_user: MagicMock,
-        mock_signal_permission_response: MagicMock,
+        mock_create_token: MagicMock,
+        mock_send_permission_response: MagicMock,
     ) -> None:
         event = self._permission_event()
         event["toolCall"]["rawInput"]["description"] = "Create a living artifact"
@@ -259,42 +265,62 @@ class TestSlackAgentPermissionPrompt(TestCase):
             "$POSTHOG_TASK_ID/runs/$POSTHOG_TASK_RUN_ID/living_artifacts/"
         )
         mock_resolve_slack_user.return_value = SimpleNamespace(user=self.user, slack_email=self.user.email)
+        mock_send_permission_response.return_value = SimpleNamespace(success=True, status_code=200, error=None)
 
         handle_slack_permission_request_for_task_run(self.task_run, event)
 
         mock_slack_cls.return_value.client.chat_postMessage.assert_not_called()
-        mock_signal_permission_response.assert_called_once_with(
-            self.task_run.workflow_id,
+        mock_send_permission_response.assert_called_once_with(
+            str(self.task_run.id),
             request_id="perm-1",
             option_id="allow",
-            actor_user_id=self.user.id,
-            actor_slack_user_id="U_ACTOR",
-            broker_reason="destructive_policy_auto_allow",
+            auth_token="sandbox-token",
         )
 
-    @patch("products.tasks.backend.temporal.client.signal_task_permission_response")
+    @patch("products.tasks.backend.facade.api.send_permission_response")
+    @patch("products.tasks.backend.facade.api.create_sandbox_connection_token", return_value="sandbox-token")
     @patch("products.slack_app.backend.api.resolve_slack_user")
     @patch("products.slack_app.backend.services.agent_permissions.SlackIntegration")
     def test_full_auto_destructive_shell_command_is_auto_approved(
         self,
         mock_slack_cls: MagicMock,
         mock_resolve_slack_user: MagicMock,
-        mock_signal_permission_response: MagicMock,
+        mock_create_token: MagicMock,
+        mock_send_permission_response: MagicMock,
     ) -> None:
         self.task_run.state = {"slack_autonomy_tier": SlackAutonomyTier.FULL_AUTO}
         self.task_run.save(update_fields=["state"])
         event = self._permission_event()
         event["toolCall"]["rawInput"]["command"] = "rm -rf report.xlsx"
         mock_resolve_slack_user.return_value = SimpleNamespace(user=self.user, slack_email=self.user.email)
+        mock_send_permission_response.return_value = SimpleNamespace(success=True, status_code=200, error=None)
 
         handle_slack_permission_request_for_task_run(self.task_run, event)
 
         mock_slack_cls.return_value.client.chat_postMessage.assert_not_called()
-        mock_signal_permission_response.assert_called_once_with(
-            self.task_run.workflow_id,
+        mock_send_permission_response.assert_called_once_with(
+            str(self.task_run.id),
             request_id="perm-1",
             option_id="allow",
-            actor_user_id=self.user.id,
-            actor_slack_user_id="U_ACTOR",
-            broker_reason="slack_full_auto",
+            auth_token="sandbox-token",
         )
+
+    @patch("products.tasks.backend.facade.api.send_permission_response")
+    @patch("products.slack_app.backend.services.agent_permissions.SlackIntegration")
+    def test_full_auto_customer_facing_destructive_command_still_prompts(
+        self,
+        mock_slack_cls: MagicMock,
+        mock_send_permission_response: MagicMock,
+    ) -> None:
+        self.task_run.state = {
+            "slack_autonomy_tier": SlackAutonomyTier.FULL_AUTO,
+            "slack_customer_facing_approval_required": True,
+        }
+        self.task_run.save(update_fields=["state"])
+        event = self._permission_event()
+        event["toolCall"]["rawInput"]["command"] = "rm -rf report.xlsx"
+
+        handle_slack_permission_request_for_task_run(self.task_run, event)
+
+        mock_send_permission_response.assert_not_called()
+        mock_slack_cls.return_value.client.chat_postMessage.assert_called_once()
