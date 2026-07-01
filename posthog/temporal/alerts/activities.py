@@ -39,6 +39,7 @@ from posthog.temporal.alerts.types import (
 from posthog.temporal.common.heartbeat import Heartbeater
 
 from products.alerts.backend.evaluation import check_alert_for_insight
+from products.alerts.backend.evaluation.contract import AlertExtractionError
 from products.alerts.backend.evaluation.validation import validate_alert_config
 from products.alerts.backend.models.alert import AlertCheck, AlertConfiguration
 from products.notifications.backend.facade.api import (
@@ -219,6 +220,19 @@ async def evaluate_alert(inputs: EvaluateAlertActivityInputs) -> EvaluateAlertRe
             breaches = alert_evaluation_result.breaches
         except CH_TRANSIENT_ERRORS:
             raise
+        except AlertExtractionError as err:
+            # The alert can't be evaluated as configured (wrong query shape / bad config) — auto-disable
+            # it and email its subscribers via the existing invalid-alert path, rather than reporting a
+            # benign misconfiguration to error tracking as if it were a crash. disable_invalid_alert
+            # persists the ERRORED check and sends the "disabled" email itself, so there's nothing more
+            # to notify here.
+            logger.warning("Alert id = %s auto-disabled — cannot evaluate as configured: %s", alert.id, err)
+            disabled_check = disable_invalid_alert(alert, str(err))
+            return EvaluateAlertResult(
+                alert_check_id=str(disabled_check.id),
+                should_notify=False,
+                new_state=AlertState.ERRORED,
+            )
         except Exception as err:
             logger.exception(f"Alert id = {alert.id}, failed to evaluate", exc_info=err)
             capture_exception(

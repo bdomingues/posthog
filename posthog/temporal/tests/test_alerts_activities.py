@@ -33,6 +33,7 @@ from posthog.temporal.alerts.types import (
     SkipReason,
 )
 
+from products.alerts.backend.evaluation.contract import AlertExtractionError
 from products.alerts.backend.evaluation.validation import THRESHOLD_BOUNDS_REQUIRED_MESSAGE
 from products.alerts.backend.models.alert import AlertCheck, AlertConfiguration, Threshold
 from products.product_analytics.backend.models.insight import Insight
@@ -354,6 +355,31 @@ class TestEvaluateAlert:
         # Only prepare-time validate_alert_config failures call disable_invalid_alert.
         refreshed = await sync_to_async(AlertConfiguration.objects.get)(pk=alert.pk)
         assert refreshed.enabled is True
+
+    async def test_evaluate_auto_disables_on_extraction_error(self, alert) -> None:
+        # An AlertExtractionError means the alert can't be evaluated as configured — it must
+        # auto-disable + email instead of being reported to error tracking as a crash. Guards the
+        # regression where benign/misconfigured funnel results flooded error tracking.
+        with (
+            patch(
+                "posthog.temporal.alerts.activities.check_alert_for_insight",
+                side_effect=AlertExtractionError("Funnel steps alert query returned no data."),
+            ),
+            patch("posthog.temporal.alerts.activities.capture_exception") as mock_capture,
+        ):
+            env = ActivityEnvironment()
+            result = await env.run(evaluate_alert, EvaluateAlertActivityInputs(alert_id=str(alert.id)))
+
+        assert result.new_state == AlertState.ERRORED
+        assert result.should_notify is False
+        mock_capture.assert_not_called()  # not a crash — must not reach error tracking
+
+        refreshed = await sync_to_async(AlertConfiguration.objects.get)(pk=alert.pk)
+        assert refreshed.enabled is False
+
+        check = await sync_to_async(AlertCheck.objects.get)(pk=result.alert_check_id)
+        assert check.state == AlertState.ERRORED
+        assert "no data" in check.error["message"]
 
     async def test_evaluate_reraises_ch_transient_error(self, alert) -> None:
         # Transient CH errors bubble up so Temporal's retry policy handles them.

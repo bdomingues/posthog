@@ -371,7 +371,7 @@ def add_alert_check(
     return alert_check, notify
 
 
-def disable_invalid_alert(alert: AlertConfiguration, reason: str) -> None:
+def disable_invalid_alert(alert: AlertConfiguration, reason: str) -> AlertCheck:
     logger.warning("check_alert.auto_disabling", alert_id=alert.id, reason=reason)
     AlertConfiguration.objects.filter(pk=alert.pk).update(
         enabled=False,
@@ -381,7 +381,9 @@ def disable_invalid_alert(alert: AlertConfiguration, reason: str) -> None:
     alert.refresh_from_db()
 
     targets_to_notify = alert.get_subscribed_users_emails()
-    AlertCheck.objects.create(
+    # targets_notified is populated up-front so the notify activity treats this check as already
+    # delivered — the disabled email is sent here, not through the standard errored-check path.
+    alert_check = AlertCheck.objects.create(
         alert_configuration=alert,
         calculated_value=None,
         condition=alert.condition,
@@ -391,6 +393,7 @@ def disable_invalid_alert(alert: AlertConfiguration, reason: str) -> None:
     )
     if targets_to_notify:
         send_notifications_for_disabled(alert, reason, targets_to_notify)
+    return alert_check
 
 
 def send_notifications_for_disabled(alert: AlertConfiguration, reason: str, targets: list[str]) -> None:
