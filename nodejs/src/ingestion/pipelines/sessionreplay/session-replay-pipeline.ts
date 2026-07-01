@@ -22,6 +22,7 @@ import { createParseMessageStep } from './parse-message-step'
 import { createRecordSessionEventStep } from './record-session-event-step'
 import { createResolveRetentionStep } from './session-batch-resolve-retention-step'
 import { createTeamFilterStep } from './team-filter-step'
+import { createValidateReplayHeadersStep } from './validate-headers-step'
 
 export interface SessionReplayPipelineInput {
     message: Message
@@ -90,8 +91,10 @@ export function createSessionReplayPipeline(
             b
                 .sequentially((b) =>
                     b
-                        // Parse headers and apply restrictions (drop/overflow)
+                        // Parse headers, then validate the ones capture guarantees (DLQ if missing)
                         .pipe(createParseHeadersStep())
+                        .pipe(createValidateReplayHeadersStep())
+                        // Apply restrictions (drop/overflow)
                         .pipe(
                             createApplyEventRestrictionsStep(eventIngestionRestrictionManager, {
                                 overflowEnabled,
@@ -101,6 +104,14 @@ export function createSessionReplayPipeline(
                         // Validate team ownership and enrich with team context
                         .pipe(createTeamFilterStep(teamService))
                 )
+                // Resolve retention for the whole batch in one call, before the message is parsed and
+                // recorded — keyed on the session_id header. Sessions with unresolvable retention are
+                // dropped and those missing a session_id header are DLQ'd, before any parse or write.
+                .gather()
+                .pipeBatchWithRetry(createResolveRetentionStep(retentionService), {
+                    tries: 3,
+                    sleepMs: 100,
+                })
                 // Map TeamForReplay.teamId to context.team.id for handleIngestionWarnings
                 .filterMap(
                     (element) => ({
@@ -127,38 +138,29 @@ export function createSessionReplayPipeline(
                                             )
                                             // Monitor library version and emit warnings for old versions
                                             .pipe(createLibVersionMonitorStep())
-                                    )
-                                    // Resolve retention for the whole batch in one call, before key
-                                    // generation; drop sessions whose retention can't be resolved.
-                                    .gather()
-                                    .pipeBatchWithRetry(createResolveRetentionStep(retentionService), {
-                                        tries: 3,
-                                        sleepMs: 100,
-                                    })
-                                    // Record to session batch (uses the resolved retention)
-                                    .sequentially((b) =>
-                                        b.pipe(
-                                            topHogWrapper(
-                                                createRecordSessionEventStep({
-                                                    sessionBatchManager,
-                                                    isDebugLoggingEnabled,
-                                                }),
-                                                [
-                                                    sum(
-                                                        'message_size_by_session_id',
-                                                        (input) => ({
+                                            // Record to session batch (uses the resolved retention)
+                                            .pipe(
+                                                topHogWrapper(
+                                                    createRecordSessionEventStep({
+                                                        sessionBatchManager,
+                                                        isDebugLoggingEnabled,
+                                                    }),
+                                                    [
+                                                        sum(
+                                                            'message_size_by_session_id',
+                                                            (input) => ({
+                                                                token: input.parsedMessage.token ?? 'unknown',
+                                                                session_id: input.parsedMessage.session_id,
+                                                            }),
+                                                            (input) => input.parsedMessage.metadata.rawSize
+                                                        ),
+                                                        timer('consume_time_ms_by_session_id', (input) => ({
                                                             token: input.parsedMessage.token ?? 'unknown',
                                                             session_id: input.parsedMessage.session_id,
-                                                        }),
-                                                        (input) => input.parsedMessage.metadata.rawSize
-                                                    ),
-                                                    timer('consume_time_ms_by_session_id', (input) => ({
-                                                        token: input.parsedMessage.token ?? 'unknown',
-                                                        session_id: input.parsedMessage.session_id,
-                                                    })),
-                                                ]
+                                                        })),
+                                                    ]
+                                                )
                                             )
-                                        )
                                     )
                                     .gather()
                             )

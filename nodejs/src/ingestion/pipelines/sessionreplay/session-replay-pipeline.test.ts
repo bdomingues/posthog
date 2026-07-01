@@ -1002,8 +1002,8 @@ describe('session-replay-pipeline', () => {
             // Override parse headers to not include token in parsed headers, but still have it in message headers
             mockCreateParseHeadersStep.mockReturnValue(
                 (input: { message: Message; headers?: Record<string, string> }) => {
-                    // Return empty headers (no token)
-                    return Promise.resolve(ok({ ...input, headers: { token: 'test-token' } }))
+                    // Return empty headers (no token); session_id is still needed for retention resolution
+                    return Promise.resolve(ok({ ...input, headers: { token: 'test-token', session_id: 'session-1' } }))
                 }
             )
 
