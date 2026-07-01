@@ -2509,6 +2509,7 @@ class NodeKind(StrEnum):
     ERROR_TRACKING_SIMILAR_ISSUES_QUERY = "ErrorTrackingSimilarIssuesQuery"
     ERROR_TRACKING_BREAKDOWNS_QUERY = "ErrorTrackingBreakdownsQuery"
     ERROR_TRACKING_ISSUE_CORRELATION_QUERY = "ErrorTrackingIssueCorrelationQuery"
+    SURVEY_RESPONSE_DRIVERS_QUERY = "SurveyResponseDriversQuery"
     LOGS_QUERY = "LogsQuery"
     LOG_ATTRIBUTES_QUERY = "LogAttributesQuery"
     LOG_VALUES_QUERY = "LogValuesQuery"
@@ -3230,6 +3231,16 @@ class SurveyQuestionType(StrEnum):
     SINGLE_CHOICE = "single_choice"
     RATING = "rating"
     LINK = "link"
+
+
+class Confidence(StrEnum):
+    HIGH = "high"
+    LOW = "low"
+
+
+class Direction(StrEnum):
+    DETRACTOR = "detractor"
+    PROMOTER = "promoter"
 
 
 class SurveyTabPosition(StrEnum):

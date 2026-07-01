@@ -1,0 +1,350 @@
+from typing import Any
+
+from freezegun import freeze_time
+from posthog.test.base import (
+    APIBaseTest,
+    ClickhouseTestMixin,
+    _create_event,
+    _create_person,
+    flush_persons_and_events,
+    snapshot_clickhouse_queries,
+)
+
+from parameterized import parameterized
+
+from posthog.schema import SurveyResponseDriversQuery
+
+from products.surveys.backend.hogql_queries.survey_response_drivers_query_runner import SurveyResponseDriversQueryRunner
+from products.surveys.backend.models import Survey, SurveyResponseArchive
+
+NPS_QUESTION = {
+    "id": "q-nps",
+    "type": "rating",
+    "question": "How likely are you to recommend us?",
+    "scale": 10,
+    "display": "number",
+    "isNpsQuestion": True,
+}
+
+
+class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
+    def _create_survey(self, questions: list[dict[str, Any]] | None = None) -> Survey:
+        return Survey.objects.create(
+            team=self.team,
+            name="NPS survey",
+            type="popover",
+            questions=[NPS_QUESTION] if questions is None else questions,
+            start_date="2024-01-01T00:00:00Z",
+        )
+
+    def _seed_responder(
+        self,
+        survey: Survey,
+        distinct_id: str,
+        score: int,
+        events: tuple[str, ...] = (),
+        submission_id: str | None = None,
+        response_timestamp: str = "2024-01-10T10:00:00Z",
+    ) -> str:
+        _create_person(distinct_ids=[distinct_id], team_id=self.team.pk)
+        response_uuid = _create_event(
+            team=self.team,
+            event="survey sent",
+            distinct_id=distinct_id,
+            timestamp=response_timestamp,
+            properties={
+                "$survey_id": str(survey.id),
+                "$survey_response": str(score),
+                "$survey_submission_id": submission_id or f"{distinct_id}-submission",
+                "$survey_completed": True,
+            },
+        )
+        for event in events:
+            _create_event(
+                team=self.team,
+                event=event,
+                distinct_id=distinct_id,
+                timestamp="2024-01-12T10:00:00Z",
+                properties={},
+            )
+        return response_uuid
+
+    def _calculate(self, survey: Survey, **kwargs: Any) -> dict[str, Any]:
+        query = SurveyResponseDriversQuery(kind="SurveyResponseDriversQuery", surveyId=str(survey.id), **kwargs)
+        return SurveyResponseDriversQueryRunner(team=self.team, query=query).calculate().model_dump()
+
+    def _drivers_by_event(self, response: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        return {driver["event"]: driver for driver in response["results"]}
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    @snapshot_clickhouse_queries
+    def test_response_shape(self) -> None:
+        survey = self._create_survey()
+        response = self._calculate(survey)
+        assert response["columns"] == ["event", "odds_ratio", "direction", "confidence", "population"]
+        assert response["results"] == []
+        assert response["totals"] == {"promoters": 0, "passives": 0, "detractors": 0}
+        assert response["questionId"] == "q-nps"
+        assert response["questionIndex"] == 0
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    @snapshot_clickhouse_queries
+    def test_detects_planted_drivers_with_high_confidence(self) -> None:
+        survey = self._create_survey()
+        for i in range(30):
+            self._seed_responder(survey, f"detractor_{i}", score=2, events=("csv import failed", "browsed docs"))
+        for i in range(30):
+            self._seed_responder(survey, f"promoter_{i}", score=10, events=("saved view used", "browsed docs"))
+        flush_persons_and_events()
+
+        response = self._calculate(survey)
+        drivers = self._drivers_by_event(response)
+
+        assert response["totals"] == {"promoters": 30, "passives": 0, "detractors": 30}
+        assert response["skewed"] is False
+
+        import_failed = drivers["csv import failed"]
+        assert import_failed["direction"] == "detractor"
+        assert import_failed["odds_ratio"] > 1
+        assert import_failed["confidence"] == "high"
+        assert import_failed["population"] == {
+            "detractors_with": 30,
+            "detractors_without": 0,
+            "promoters_with": 0,
+            "promoters_without": 30,
+        }
+
+        saved_view = drivers["saved view used"]
+        assert saved_view["direction"] == "promoter"
+        assert saved_view["odds_ratio"] < 1
+        assert saved_view["confidence"] == "high"
+
+        # An event both buckets perform equally distinguishes neither and is dropped.
+        assert "browsed docs" not in drivers
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_suppresses_events_below_sample_threshold(self) -> None:
+        survey = self._create_survey()
+        self._seed_responder(survey, "detractor_rare", score=1, events=("rare event",))
+        for i in range(40):
+            self._seed_responder(survey, f"detractor_{i}", score=2, events=("common event",))
+        for i in range(40):
+            self._seed_responder(survey, f"promoter_{i}", score=10, events=("common event",))
+        flush_persons_and_events()
+
+        response = self._calculate(survey)
+        drivers = self._drivers_by_event(response)
+
+        assert "rare event" not in drivers
+        assert response["suppressedEvents"] >= 1
+        assert response["sampleThreshold"] >= 2
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_flags_low_confidence_below_min_sample_count(self) -> None:
+        survey = self._create_survey()
+        for i in range(5):
+            self._seed_responder(survey, f"detractor_{i}", score=0, events=("niche failure",))
+        for i in range(95):
+            self._seed_responder(survey, f"promoter_{i}", score=9, events=())
+        flush_persons_and_events()
+
+        response = self._calculate(survey)
+        drivers = self._drivers_by_event(response)
+
+        niche = drivers["niche failure"]
+        assert niche["direction"] == "detractor"
+        assert niche["confidence"] == "low"
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_counts_resubmitting_responder_once(self) -> None:
+        survey = self._create_survey()
+        self._seed_responder(survey, "resubmitter", score=2, submission_id="sub-1")
+        _create_event(
+            team=self.team,
+            event="survey sent",
+            distinct_id="resubmitter",
+            timestamp="2024-01-10T11:00:00Z",
+            properties={
+                "$survey_id": str(survey.id),
+                "$survey_response": "2",
+                "$survey_submission_id": "sub-1",
+                "$survey_completed": True,
+            },
+        )
+        self._seed_responder(survey, "promoter_1", score=10)
+        flush_persons_and_events()
+
+        response = self._calculate(survey)
+
+        assert response["totals"]["detractors"] == 1
+        assert response["totals"]["promoters"] == 1
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_archiving_canonical_resubmission_excludes_responder(self) -> None:
+        # The submission dedupe keeps only argMax(uuid, timestamp) per submission id, so
+        # archiving that canonical event must exclude the responder even though an earlier
+        # duplicate 'survey sent' row still exists.
+        survey = self._create_survey()
+        self._seed_responder(survey, "resubmitter", score=2, submission_id="sub-1")
+        canonical_uuid = _create_event(
+            team=self.team,
+            event="survey sent",
+            distinct_id="resubmitter",
+            timestamp="2024-01-10T11:00:00Z",
+            properties={
+                "$survey_id": str(survey.id),
+                "$survey_response": "2",
+                "$survey_submission_id": "sub-1",
+                "$survey_completed": True,
+            },
+        )
+        SurveyResponseArchive.objects.create(team=self.team, survey=survey, response_uuid=canonical_uuid)
+        flush_persons_and_events()
+
+        response = self._calculate(survey)
+
+        assert response["totals"] == {"promoters": 0, "passives": 0, "detractors": 0}
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    @snapshot_clickhouse_queries
+    def test_excludes_archived_responses(self) -> None:
+        survey = self._create_survey()
+        archived_uuid = self._seed_responder(survey, "archived_detractor", score=0, events=("some event",))
+        self._seed_responder(survey, "kept_detractor", score=1, events=("some event",))
+        self._seed_responder(survey, "kept_promoter", score=10, events=("some event",))
+        SurveyResponseArchive.objects.create(team=self.team, survey=survey, response_uuid=archived_uuid)
+        flush_persons_and_events()
+
+        response = self._calculate(survey)
+
+        assert response["totals"]["detractors"] == 1
+        assert response["totals"]["promoters"] == 1
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_reports_totals_when_responders_have_no_other_events(self) -> None:
+        survey = self._create_survey()
+        for i in range(3):
+            self._seed_responder(survey, f"detractor_{i}", score=2)
+        for i in range(3):
+            self._seed_responder(survey, f"promoter_{i}", score=10)
+        flush_persons_and_events()
+
+        response = self._calculate(survey)
+
+        assert response["totals"] == {"promoters": 3, "passives": 0, "detractors": 3}
+        assert response["results"] == []
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_respects_days_around_response_window(self) -> None:
+        survey = self._create_survey()
+        for i in range(30):
+            distinct_id = f"detractor_{i}"
+            self._seed_responder(survey, distinct_id, score=2)
+            _create_event(
+                team=self.team,
+                event="near event",
+                distinct_id=distinct_id,
+                timestamp="2024-01-10T18:00:00Z",
+                properties={},
+            )
+            _create_event(
+                team=self.team,
+                event="far event",
+                distinct_id=distinct_id,
+                timestamp="2024-01-14T10:00:00Z",
+                properties={},
+            )
+        for i in range(30):
+            self._seed_responder(survey, f"promoter_{i}", score=10)
+        flush_persons_and_events()
+
+        response = self._calculate(survey, daysAroundResponse=1)
+        drivers = self._drivers_by_event(response)
+
+        assert "near event" in drivers
+        assert "far event" not in drivers
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_flags_skewed_totals(self) -> None:
+        survey = self._create_survey()
+        for i in range(2):
+            self._seed_responder(survey, f"detractor_{i}", score=3, events=("event a",))
+        for i in range(30):
+            self._seed_responder(survey, f"promoter_{i}", score=10, events=("event a",))
+        flush_persons_and_events()
+
+        response = self._calculate(survey)
+
+        assert response["skewed"] is True
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_empty_bucket_returns_no_drivers_and_skew(self) -> None:
+        survey = self._create_survey()
+        for i in range(10):
+            self._seed_responder(survey, f"promoter_{i}", score=10, events=("event a",))
+        flush_persons_and_events()
+
+        response = self._calculate(survey)
+
+        assert response["results"] == []
+        assert response["skewed"] is True
+        assert response["totals"]["promoters"] == 10
+
+    @parameterized.expand(
+        [
+            (0, "detractors"),
+            (6, "detractors"),
+            (7, "passives"),
+            (8, "passives"),
+            (9, "promoters"),
+            (10, "promoters"),
+        ]
+    )
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_nps_bucket_boundaries(self, score: int, expected_bucket: str) -> None:
+        survey = self._create_survey()
+        self._seed_responder(survey, "responder", score=score, events=("event a",))
+        flush_persons_and_events()
+
+        response = self._calculate(survey)
+
+        assert response["totals"][expected_bucket] == 1
+        assert sum(response["totals"].values()) == 1
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_requires_nps_question(self) -> None:
+        survey = self._create_survey(questions=[{"id": "q-open", "type": "open", "question": "Any feedback?"}])
+        with self.assertRaises(ValueError):
+            self._calculate(survey)
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_rejects_explicitly_selected_non_nps_question(self) -> None:
+        survey = self._create_survey(
+            questions=[
+                {"id": "q-open", "type": "open", "question": "Any feedback?"},
+                {"id": "q-csat", "type": "rating", "question": "How satisfied are you?", "scale": 5},
+                NPS_QUESTION,
+            ]
+        )
+        with self.assertRaises(ValueError):
+            self._calculate(survey, questionId="q-open")
+        with self.assertRaises(ValueError):
+            self._calculate(survey, questionId="q-csat")
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_rejects_invalid_days_around_response(self) -> None:
+        survey = self._create_survey()
+        with self.assertRaises(ValueError):
+            self._calculate(survey, daysAroundResponse=0)
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_explicit_question_selection(self) -> None:
+        survey = self._create_survey(
+            questions=[
+                {"id": "q-open", "type": "open", "question": "Any feedback?"},
+                NPS_QUESTION | {"id": "q-nps-2"},
+            ]
+        )
+        response = self._calculate(survey, questionId="q-nps-2")
+        assert response["questionId"] == "q-nps-2"
+        assert response["questionIndex"] == 1

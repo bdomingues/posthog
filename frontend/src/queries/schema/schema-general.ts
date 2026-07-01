@@ -108,6 +108,7 @@ export enum NodeKind {
     ErrorTrackingSimilarIssuesQuery = 'ErrorTrackingSimilarIssuesQuery',
     ErrorTrackingBreakdownsQuery = 'ErrorTrackingBreakdownsQuery',
     ErrorTrackingIssueCorrelationQuery = 'ErrorTrackingIssueCorrelationQuery',
+    SurveyResponseDriversQuery = 'SurveyResponseDriversQuery',
     LogsQuery = 'LogsQuery',
     LogAttributesQuery = 'LogAttributesQuery',
     LogValuesQuery = 'LogValuesQuery',
@@ -245,6 +246,7 @@ export type AnyDataNode =
     | ErrorTrackingSimilarIssuesQuery
     | ErrorTrackingBreakdownsQuery
     | ErrorTrackingIssueCorrelationQuery
+    | SurveyResponseDriversQuery
     | LogsQuery
     | LogAttributesQuery
     | LogValuesQuery
@@ -303,6 +305,7 @@ export type QuerySchema =
     | ErrorTrackingSimilarIssuesQuery
     | ErrorTrackingBreakdownsQuery
     | ErrorTrackingIssueCorrelationQuery
+    | SurveyResponseDriversQuery
     | ExperimentFunnelsQuery
     | ExperimentTrendsQuery
     | ExperimentQuery
@@ -3126,6 +3129,52 @@ export interface ErrorTrackingIssueCorrelationQueryResponse extends AnalyticsQue
 }
 export type CachedErrorTrackingIssueCorrelationQueryResponse =
     CachedQueryResponse<ErrorTrackingIssueCorrelationQueryResponse>
+
+export interface SurveyResponseDriversQuery extends DataNode<SurveyResponseDriversQueryResponse> {
+    kind: NodeKind.SurveyResponseDriversQuery
+    surveyId: string
+    /** Rating question to bucket responders by. Defaults to the survey's first NPS (0-10 rating) question. */
+    questionId?: string
+    questionIndex?: integer
+    /** Behavioral window on each side of a person's survey response. */
+    daysAroundResponse?: integer
+}
+
+export interface SurveyResponseDriver {
+    event: string
+    odds_ratio: number
+    direction: 'detractor' | 'promoter'
+    confidence: 'high' | 'low'
+    population: {
+        detractors_with: integer
+        detractors_without: integer
+        promoters_with: integer
+        promoters_without: integer
+    }
+}
+
+export interface SurveyResponseDriversQueryResponse extends AnalyticsQueryResponseBase {
+    results: SurveyResponseDriver[]
+    totals?: {
+        promoters: integer
+        passives: integer
+        detractors: integer
+    }
+    /** Promoter:detractor totals are more lopsided than 10:1, so odds ratios are unreliable. */
+    skewed?: boolean
+    /** Events hidden because too few sampled responders performed them. */
+    suppressedEvents?: integer
+    /** Minimum sampled responders required for an event to be reported. */
+    sampleThreshold?: integer
+    questionId?: string
+    questionIndex?: integer
+    /** True when more distinct events existed than were scanned — the ranking may be incomplete beyond the most frequent events. */
+    hasMore?: boolean
+    limit?: integer
+    offset?: integer
+    columns?: string[]
+}
+export type CachedSurveyResponseDriversQueryResponse = CachedQueryResponse<SurveyResponseDriversQueryResponse>
 
 export interface ErrorTrackingIssueFilteringToolOutput extends Pick<
     ErrorTrackingQuery,

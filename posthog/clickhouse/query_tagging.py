@@ -205,6 +205,8 @@ def kind_fallback_tags(kind: NodeKind) -> FallbackTags | None:
             | NodeKind.ERROR_TRACKING_BREAKDOWNS_QUERY
         ):
             return {"product": Product.ERROR_TRACKING}
+        case NodeKind.SURVEY_RESPONSE_DRIVERS_QUERY:
+            return {"product": Product.SURVEYS}
         case NodeKind.LOGS_QUERY | NodeKind.LOG_ATTRIBUTES_QUERY | NodeKind.LOG_VALUES_QUERY:
             return {"product": Product.LOGS}
         case NodeKind.RECORDINGS_QUERY | NodeKind.SESSION_BATCH_EVENTS_QUERY:

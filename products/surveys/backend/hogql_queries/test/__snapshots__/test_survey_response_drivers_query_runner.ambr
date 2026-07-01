@@ -1,0 +1,249 @@
+# serializer version: 1
+# name: TestSurveyResponseDriversQueryRunner.test_detects_planted_drivers_with_high_confidence
+  '''
+  SELECT countIf(equals(bucket, 'detractor')) AS total_detractors,
+         countIf(equals(bucket, 'promoter')) AS total_promoters,
+         countIf(equals(bucket, 'passive')) AS total_passives
+  FROM
+    (SELECT person_id AS person_id,
+            argMax(multiIf(ifNull(greaterOrEquals(score, 9), 0), 'promoter', ifNull(greaterOrEquals(score, 7), 0), 'passive', 'detractor'), timestamp) AS bucket,
+            max(timestamp) AS response_ts
+     FROM
+       (SELECT if(not(empty(events__override.distinct_id)), events__override.person_id, events.person_id) AS person_id,
+               toTimeZone(events.timestamp, 'UTC') AS timestamp,
+               accurateCastOrNull(coalesce(nullIf(JSONExtractString(events.properties, '$survey_response_q-nps'), ''), nullIf(JSONExtractString(events.properties, '$survey_response'), '')), 'Float64') AS score
+        FROM events
+        LEFT OUTER JOIN
+          (SELECT argMax(person_distinct_id_overrides.person_id, person_distinct_id_overrides.version) AS person_id,
+                  person_distinct_id_overrides.distinct_id AS distinct_id
+           FROM person_distinct_id_overrides
+           WHERE equals(person_distinct_id_overrides.team_id, 99999)
+           GROUP BY person_distinct_id_overrides.distinct_id
+           HAVING equals(argMax(person_distinct_id_overrides.is_deleted, person_distinct_id_overrides.version), 0) SETTINGS optimize_aggregation_in_order=1) AS events__override ON equals(events.distinct_id, events__override.distinct_id)
+        WHERE and(equals(events.team_id, 99999), equals(events.event, 'survey sent'), ifNull(equals(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_id'), ''), 'null'), '^"|"$', ''), '018d0cfe-2a00-0002-c78b-98d3c82da037'), 0), greaterOrEquals(events.timestamp, toDateTime64('explicit_redacted_timestamp', 6, 'UTC')), lessOrEquals(events.timestamp, toDateTime64('today', 6, 'UTC')), in(events.uuid,
+                                                                                                                                                                                                                                                                                                                                                                                                                             (SELECT argMax(events.uuid, toTimeZone(events.timestamp, 'UTC')) AS `argMax(uuid, toTimeZone(timestamp, 'UTC'))`
+                                                                                                                                                                                                                                                                                                                                                                                                                              FROM events
+                                                                                                                                                                                                                                                                                                                                                                                                                              WHERE and(equals(events.team_id, 99999), and(and(equals(events.event, 'survey sent'), ifNull(equals(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_id'), ''), 'null'), '^"|"$', ''), '018d0cfe-2a00-0002-c78b-98d3c82da037'), 0)), greaterOrEquals(events.timestamp, toDateTime64('2024-01-01 00:00:00', 6, 'UTC'))), lessOrEquals(events.timestamp, toDateTime64('2024-01-15 12:00:00', 6, 'UTC')))
+                                                                                                                                                                                                                                                                                                                                                                                                                              GROUP BY if(ifNull(equals(coalesce(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_submission_id'), ''), 'null'), '^"|"$', ''), ''), ''), 0), toString(events.uuid), replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_submission_id'), ''), 'null'), '^"|"$', ''))))))
+     WHERE and(isNotNull(score), ifNull(greaterOrEquals(score, 0), 0), ifNull(lessOrEquals(score, 10), 0))
+     GROUP BY person_id)
+  LIMIT 100 SETTINGS readonly=2,
+                     max_execution_time=60,
+                     allow_experimental_object_type=1,
+                     max_ast_elements=4000000,
+                     max_expanded_ast_elements=4000000,
+                     max_bytes_before_external_group_by=0,
+                     transform_null_in=1,
+                     optimize_min_equality_disjunction_chain_length=4294967295,
+                     optimize_rewrite_aggregate_function_with_if=0,
+                     optimize_min_inequality_conjunction_chain_length=4294967295,
+                     allow_experimental_join_condition=1,
+                     use_hive_partitioning=0
+  '''
+# ---
+# name: TestSurveyResponseDriversQueryRunner.test_detects_planted_drivers_with_high_confidence.1
+  '''
+  WITH responders AS
+    (SELECT person_id AS person_id,
+            argMax(multiIf(ifNull(greaterOrEquals(score, 9), 0), 'promoter', ifNull(greaterOrEquals(score, 7), 0), 'passive', 'detractor'), timestamp) AS bucket,
+            max(timestamp) AS response_ts
+     FROM
+       (SELECT if(not(empty(events__override.distinct_id)), events__override.person_id, events.person_id) AS person_id,
+               toTimeZone(events.timestamp, 'UTC') AS timestamp,
+               accurateCastOrNull(coalesce(nullIf(JSONExtractString(events.properties, '$survey_response_q-nps'), ''), nullIf(JSONExtractString(events.properties, '$survey_response'), '')), 'Float64') AS score
+        FROM events
+        LEFT OUTER JOIN
+          (SELECT argMax(person_distinct_id_overrides.person_id, person_distinct_id_overrides.version) AS person_id,
+                  person_distinct_id_overrides.distinct_id AS distinct_id
+           FROM person_distinct_id_overrides
+           WHERE equals(person_distinct_id_overrides.team_id, 99999)
+           GROUP BY person_distinct_id_overrides.distinct_id
+           HAVING equals(argMax(person_distinct_id_overrides.is_deleted, person_distinct_id_overrides.version), 0) SETTINGS optimize_aggregation_in_order=1) AS events__override ON equals(events.distinct_id, events__override.distinct_id)
+        WHERE and(equals(events.team_id, 99999), equals(events.event, 'survey sent'), ifNull(equals(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_id'), ''), 'null'), '^"|"$', ''), '018d0cfe-2a00-0002-c78b-98d3c82da037'), 0), greaterOrEquals(events.timestamp, toDateTime64('explicit_redacted_timestamp', 6, 'UTC')), lessOrEquals(events.timestamp, toDateTime64('today', 6, 'UTC')), in(events.uuid,
+                                                                                                                                                                                                                                                                                                                                                                                                                             (SELECT argMax(events.uuid, toTimeZone(events.timestamp, 'UTC')) AS `argMax(uuid, toTimeZone(timestamp, 'UTC'))`
+                                                                                                                                                                                                                                                                                                                                                                                                                              FROM events
+                                                                                                                                                                                                                                                                                                                                                                                                                              WHERE and(equals(events.team_id, 99999), and(and(equals(events.event, 'survey sent'), ifNull(equals(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_id'), ''), 'null'), '^"|"$', ''), '018d0cfe-2a00-0002-c78b-98d3c82da037'), 0)), greaterOrEquals(events.timestamp, toDateTime64('2024-01-01 00:00:00', 6, 'UTC'))), lessOrEquals(events.timestamp, toDateTime64('2024-01-15 12:00:00', 6, 'UTC')))
+                                                                                                                                                                                                                                                                                                                                                                                                                              GROUP BY if(ifNull(equals(coalesce(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_submission_id'), ''), 'null'), '^"|"$', ''), ''), ''), 0), toString(events.uuid), replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_submission_id'), ''), 'null'), '^"|"$', ''))))))
+     WHERE and(isNotNull(score), ifNull(greaterOrEquals(score, 0), 0), ifNull(lessOrEquals(score, 10), 0))
+     GROUP BY person_id)
+  SELECT event AS event,
+         countIf(equals(bucket, 'detractor')) AS detractors_with,
+         countIf(equals(bucket, 'promoter')) AS promoters_with
+  FROM
+    (SELECT e.event AS event,
+            if(not(empty(e__override.distinct_id)), e__override.person_id, e.person_id) AS person_id,
+            any(r.bucket) AS bucket
+     FROM events AS e
+     LEFT OUTER JOIN
+       (SELECT argMax(person_distinct_id_overrides.person_id, person_distinct_id_overrides.version) AS person_id,
+               person_distinct_id_overrides.distinct_id AS distinct_id
+        FROM person_distinct_id_overrides
+        WHERE equals(person_distinct_id_overrides.team_id, 99999)
+        GROUP BY person_distinct_id_overrides.distinct_id
+        HAVING equals(argMax(person_distinct_id_overrides.is_deleted, person_distinct_id_overrides.version), 0) SETTINGS optimize_aggregation_in_order=1) AS e__override ON equals(e.distinct_id, e__override.distinct_id)
+     INNER JOIN responders AS r ON equals(if(not(empty(e__override.distinct_id)), e__override.person_id, e.person_id), r.person_id)
+     WHERE and(equals(e.team_id, 99999), greaterOrEquals(e.timestamp, minus(toDateTime64('explicit_redacted_timestamp', 6, 'UTC'), toIntervalDay(30))), lessOrEquals(e.timestamp, plus(toDateTime64('today', 6, 'UTC'), toIntervalDay(30))), greaterOrEquals(e.timestamp, minus(toTimeZone(r.response_ts, 'UTC'), toIntervalDay(30))), lessOrEquals(e.timestamp, plus(toTimeZone(r.response_ts, 'UTC'), toIntervalDay(30))), notIn(e.event, ['survey shown', 'survey dismissed', 'survey sent']))
+     GROUP BY e.event,
+              if(not(empty(e__override.distinct_id)), e__override.person_id, e.person_id))
+  GROUP BY event
+  ORDER BY plus(detractors_with, promoters_with) DESC
+  LIMIT 301
+  OFFSET 0 SETTINGS readonly=2,
+                    max_execution_time=60,
+                    allow_experimental_object_type=1,
+                    max_ast_elements=4000000,
+                    max_expanded_ast_elements=4000000,
+                    max_bytes_before_external_group_by=0,
+                    transform_null_in=1,
+                    optimize_min_equality_disjunction_chain_length=4294967295,
+                    optimize_rewrite_aggregate_function_with_if=0,
+                    optimize_min_inequality_conjunction_chain_length=4294967295,
+                    allow_experimental_join_condition=1,
+                    use_hive_partitioning=0
+  '''
+# ---
+# name: TestSurveyResponseDriversQueryRunner.test_excludes_archived_responses
+  '''
+  SELECT countIf(equals(bucket, 'detractor')) AS total_detractors,
+         countIf(equals(bucket, 'promoter')) AS total_promoters,
+         countIf(equals(bucket, 'passive')) AS total_passives
+  FROM
+    (SELECT person_id AS person_id,
+            argMax(multiIf(ifNull(greaterOrEquals(score, 9), 0), 'promoter', ifNull(greaterOrEquals(score, 7), 0), 'passive', 'detractor'), timestamp) AS bucket,
+            max(timestamp) AS response_ts
+     FROM
+       (SELECT if(not(empty(events__override.distinct_id)), events__override.person_id, events.person_id) AS person_id,
+               toTimeZone(events.timestamp, 'UTC') AS timestamp,
+               accurateCastOrNull(coalesce(nullIf(JSONExtractString(events.properties, '$survey_response_q-nps'), ''), nullIf(JSONExtractString(events.properties, '$survey_response'), '')), 'Float64') AS score
+        FROM events
+        LEFT OUTER JOIN
+          (SELECT argMax(person_distinct_id_overrides.person_id, person_distinct_id_overrides.version) AS person_id,
+                  person_distinct_id_overrides.distinct_id AS distinct_id
+           FROM person_distinct_id_overrides
+           WHERE equals(person_distinct_id_overrides.team_id, 99999)
+           GROUP BY person_distinct_id_overrides.distinct_id
+           HAVING equals(argMax(person_distinct_id_overrides.is_deleted, person_distinct_id_overrides.version), 0) SETTINGS optimize_aggregation_in_order=1) AS events__override ON equals(events.distinct_id, events__override.distinct_id)
+        WHERE and(equals(events.team_id, 99999), equals(events.event, 'survey sent'), ifNull(equals(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_id'), ''), 'null'), '^"|"$', ''), '018d0cfe-2a00-0004-7df7-1c3308dc85e8'), 0), greaterOrEquals(events.timestamp, toDateTime64('explicit_redacted_timestamp', 6, 'UTC')), lessOrEquals(events.timestamp, toDateTime64('today', 6, 'UTC')), in(events.uuid,
+                                                                                                                                                                                                                                                                                                                                                                                                                             (SELECT argMax(events.uuid, toTimeZone(events.timestamp, 'UTC')) AS `argMax(uuid, toTimeZone(timestamp, 'UTC'))`
+                                                                                                                                                                                                                                                                                                                                                                                                                              FROM events
+                                                                                                                                                                                                                                                                                                                                                                                                                              WHERE and(equals(events.team_id, 99999), and(and(equals(events.event, 'survey sent'), ifNull(equals(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_id'), ''), 'null'), '^"|"$', ''), '018d0cfe-2a00-0004-7df7-1c3308dc85e8'), 0)), greaterOrEquals(events.timestamp, toDateTime64('2024-01-01 00:00:00', 6, 'UTC'))), lessOrEquals(events.timestamp, toDateTime64('2024-01-15 12:00:00', 6, 'UTC')))
+                                                                                                                                                                                                                                                                                                                                                                                                                              GROUP BY if(ifNull(equals(coalesce(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_submission_id'), ''), 'null'), '^"|"$', ''), ''), ''), 0), toString(events.uuid), replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_submission_id'), ''), 'null'), '^"|"$', '')))), notIn(events.uuid, tuple('70f41fa2-4ce3-4ebd-a399-49d776201acf'))))
+     WHERE and(isNotNull(score), ifNull(greaterOrEquals(score, 0), 0), ifNull(lessOrEquals(score, 10), 0))
+     GROUP BY person_id)
+  LIMIT 100 SETTINGS readonly=2,
+                     max_execution_time=60,
+                     allow_experimental_object_type=1,
+                     max_ast_elements=4000000,
+                     max_expanded_ast_elements=4000000,
+                     max_bytes_before_external_group_by=0,
+                     transform_null_in=1,
+                     optimize_min_equality_disjunction_chain_length=4294967295,
+                     optimize_rewrite_aggregate_function_with_if=0,
+                     optimize_min_inequality_conjunction_chain_length=4294967295,
+                     allow_experimental_join_condition=1,
+                     use_hive_partitioning=0
+  '''
+# ---
+# name: TestSurveyResponseDriversQueryRunner.test_excludes_archived_responses.1
+  '''
+  WITH responders AS
+    (SELECT person_id AS person_id,
+            argMax(multiIf(ifNull(greaterOrEquals(score, 9), 0), 'promoter', ifNull(greaterOrEquals(score, 7), 0), 'passive', 'detractor'), timestamp) AS bucket,
+            max(timestamp) AS response_ts
+     FROM
+       (SELECT if(not(empty(events__override.distinct_id)), events__override.person_id, events.person_id) AS person_id,
+               toTimeZone(events.timestamp, 'UTC') AS timestamp,
+               accurateCastOrNull(coalesce(nullIf(JSONExtractString(events.properties, '$survey_response_q-nps'), ''), nullIf(JSONExtractString(events.properties, '$survey_response'), '')), 'Float64') AS score
+        FROM events
+        LEFT OUTER JOIN
+          (SELECT argMax(person_distinct_id_overrides.person_id, person_distinct_id_overrides.version) AS person_id,
+                  person_distinct_id_overrides.distinct_id AS distinct_id
+           FROM person_distinct_id_overrides
+           WHERE equals(person_distinct_id_overrides.team_id, 99999)
+           GROUP BY person_distinct_id_overrides.distinct_id
+           HAVING equals(argMax(person_distinct_id_overrides.is_deleted, person_distinct_id_overrides.version), 0) SETTINGS optimize_aggregation_in_order=1) AS events__override ON equals(events.distinct_id, events__override.distinct_id)
+        WHERE and(equals(events.team_id, 99999), equals(events.event, 'survey sent'), ifNull(equals(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_id'), ''), 'null'), '^"|"$', ''), '018d0cfe-2a00-0004-7df7-1c3308dc85e8'), 0), greaterOrEquals(events.timestamp, toDateTime64('explicit_redacted_timestamp', 6, 'UTC')), lessOrEquals(events.timestamp, toDateTime64('today', 6, 'UTC')), in(events.uuid,
+                                                                                                                                                                                                                                                                                                                                                                                                                             (SELECT argMax(events.uuid, toTimeZone(events.timestamp, 'UTC')) AS `argMax(uuid, toTimeZone(timestamp, 'UTC'))`
+                                                                                                                                                                                                                                                                                                                                                                                                                              FROM events
+                                                                                                                                                                                                                                                                                                                                                                                                                              WHERE and(equals(events.team_id, 99999), and(and(equals(events.event, 'survey sent'), ifNull(equals(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_id'), ''), 'null'), '^"|"$', ''), '018d0cfe-2a00-0004-7df7-1c3308dc85e8'), 0)), greaterOrEquals(events.timestamp, toDateTime64('2024-01-01 00:00:00', 6, 'UTC'))), lessOrEquals(events.timestamp, toDateTime64('2024-01-15 12:00:00', 6, 'UTC')))
+                                                                                                                                                                                                                                                                                                                                                                                                                              GROUP BY if(ifNull(equals(coalesce(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_submission_id'), ''), 'null'), '^"|"$', ''), ''), ''), 0), toString(events.uuid), replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_submission_id'), ''), 'null'), '^"|"$', '')))), notIn(events.uuid, tuple('70f41fa2-4ce3-4ebd-a399-49d776201acf'))))
+     WHERE and(isNotNull(score), ifNull(greaterOrEquals(score, 0), 0), ifNull(lessOrEquals(score, 10), 0))
+     GROUP BY person_id)
+  SELECT event AS event,
+         countIf(equals(bucket, 'detractor')) AS detractors_with,
+         countIf(equals(bucket, 'promoter')) AS promoters_with
+  FROM
+    (SELECT e.event AS event,
+            if(not(empty(e__override.distinct_id)), e__override.person_id, e.person_id) AS person_id,
+            any(r.bucket) AS bucket
+     FROM events AS e
+     LEFT OUTER JOIN
+       (SELECT argMax(person_distinct_id_overrides.person_id, person_distinct_id_overrides.version) AS person_id,
+               person_distinct_id_overrides.distinct_id AS distinct_id
+        FROM person_distinct_id_overrides
+        WHERE equals(person_distinct_id_overrides.team_id, 99999)
+        GROUP BY person_distinct_id_overrides.distinct_id
+        HAVING equals(argMax(person_distinct_id_overrides.is_deleted, person_distinct_id_overrides.version), 0) SETTINGS optimize_aggregation_in_order=1) AS e__override ON equals(e.distinct_id, e__override.distinct_id)
+     INNER JOIN responders AS r ON equals(if(not(empty(e__override.distinct_id)), e__override.person_id, e.person_id), r.person_id)
+     WHERE and(equals(e.team_id, 99999), greaterOrEquals(e.timestamp, minus(toDateTime64('explicit_redacted_timestamp', 6, 'UTC'), toIntervalDay(30))), lessOrEquals(e.timestamp, plus(toDateTime64('today', 6, 'UTC'), toIntervalDay(30))), greaterOrEquals(e.timestamp, minus(toTimeZone(r.response_ts, 'UTC'), toIntervalDay(30))), lessOrEquals(e.timestamp, plus(toTimeZone(r.response_ts, 'UTC'), toIntervalDay(30))), notIn(e.event, ['survey shown', 'survey dismissed', 'survey sent']))
+     GROUP BY e.event,
+              if(not(empty(e__override.distinct_id)), e__override.person_id, e.person_id))
+  GROUP BY event
+  ORDER BY plus(detractors_with, promoters_with) DESC
+  LIMIT 301
+  OFFSET 0 SETTINGS readonly=2,
+                    max_execution_time=60,
+                    allow_experimental_object_type=1,
+                    max_ast_elements=4000000,
+                    max_expanded_ast_elements=4000000,
+                    max_bytes_before_external_group_by=0,
+                    transform_null_in=1,
+                    optimize_min_equality_disjunction_chain_length=4294967295,
+                    optimize_rewrite_aggregate_function_with_if=0,
+                    optimize_min_inequality_conjunction_chain_length=4294967295,
+                    allow_experimental_join_condition=1,
+                    use_hive_partitioning=0
+  '''
+# ---
+# name: TestSurveyResponseDriversQueryRunner.test_response_shape
+  '''
+  SELECT countIf(equals(bucket, 'detractor')) AS total_detractors,
+         countIf(equals(bucket, 'promoter')) AS total_promoters,
+         countIf(equals(bucket, 'passive')) AS total_passives
+  FROM
+    (SELECT person_id AS person_id,
+            argMax(multiIf(ifNull(greaterOrEquals(score, 9), 0), 'promoter', ifNull(greaterOrEquals(score, 7), 0), 'passive', 'detractor'), timestamp) AS bucket,
+            max(timestamp) AS response_ts
+     FROM
+       (SELECT if(not(empty(events__override.distinct_id)), events__override.person_id, events.person_id) AS person_id,
+               toTimeZone(events.timestamp, 'UTC') AS timestamp,
+               accurateCastOrNull(coalesce(nullIf(JSONExtractString(events.properties, '$survey_response_q-nps'), ''), nullIf(JSONExtractString(events.properties, '$survey_response'), '')), 'Float64') AS score
+        FROM events
+        LEFT OUTER JOIN
+          (SELECT argMax(person_distinct_id_overrides.person_id, person_distinct_id_overrides.version) AS person_id,
+                  person_distinct_id_overrides.distinct_id AS distinct_id
+           FROM person_distinct_id_overrides
+           WHERE equals(person_distinct_id_overrides.team_id, 99999)
+           GROUP BY person_distinct_id_overrides.distinct_id
+           HAVING equals(argMax(person_distinct_id_overrides.is_deleted, person_distinct_id_overrides.version), 0) SETTINGS optimize_aggregation_in_order=1) AS events__override ON equals(events.distinct_id, events__override.distinct_id)
+        WHERE and(equals(events.team_id, 99999), equals(events.event, 'survey sent'), ifNull(equals(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_id'), ''), 'null'), '^"|"$', ''), '018d0cfe-2a00-0013-fc5d-17ae8821ca60'), 0), greaterOrEquals(events.timestamp, toDateTime64('explicit_redacted_timestamp', 6, 'UTC')), lessOrEquals(events.timestamp, toDateTime64('today', 6, 'UTC')), in(events.uuid,
+                                                                                                                                                                                                                                                                                                                                                                                                                             (SELECT argMax(events.uuid, toTimeZone(events.timestamp, 'UTC')) AS `argMax(uuid, toTimeZone(timestamp, 'UTC'))`
+                                                                                                                                                                                                                                                                                                                                                                                                                              FROM events
+                                                                                                                                                                                                                                                                                                                                                                                                                              WHERE and(equals(events.team_id, 99999), and(and(equals(events.event, 'survey sent'), ifNull(equals(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_id'), ''), 'null'), '^"|"$', ''), '018d0cfe-2a00-0013-fc5d-17ae8821ca60'), 0)), greaterOrEquals(events.timestamp, toDateTime64('2024-01-01 00:00:00', 6, 'UTC'))), lessOrEquals(events.timestamp, toDateTime64('2024-01-15 12:00:00', 6, 'UTC')))
+                                                                                                                                                                                                                                                                                                                                                                                                                              GROUP BY if(ifNull(equals(coalesce(replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_submission_id'), ''), 'null'), '^"|"$', ''), ''), ''), 0), toString(events.uuid), replaceRegexpAll(nullIf(nullIf(JSONExtractRaw(events.properties, '$survey_submission_id'), ''), 'null'), '^"|"$', ''))))))
+     WHERE and(isNotNull(score), ifNull(greaterOrEquals(score, 0), 0), ifNull(lessOrEquals(score, 10), 0))
+     GROUP BY person_id)
+  LIMIT 100 SETTINGS readonly=2,
+                     max_execution_time=60,
+                     allow_experimental_object_type=1,
+                     max_ast_elements=4000000,
+                     max_expanded_ast_elements=4000000,
+                     max_bytes_before_external_group_by=0,
+                     transform_null_in=1,
+                     optimize_min_equality_disjunction_chain_length=4294967295,
+                     optimize_rewrite_aggregate_function_with_if=0,
+                     optimize_min_inequality_conjunction_chain_length=4294967295,
+                     allow_experimental_join_condition=1,
+                     use_hive_partitioning=0
+  '''
+# ---
