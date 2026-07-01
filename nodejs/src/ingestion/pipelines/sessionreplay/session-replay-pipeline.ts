@@ -22,7 +22,7 @@ import { createParseMessageStep } from './parse-message-step'
 import { createRecordSessionEventStep } from './record-session-event-step'
 import { createResolveRetentionStep } from './session-batch-resolve-retention-step'
 import { createTeamFilterStep } from './team-filter-step'
-import { createValidateReplayHeadersStep } from './validate-headers-step'
+import { createValidateSessionReplayHeadersStep } from './validate-headers-step'
 
 export interface SessionReplayPipelineInput {
     message: Message
@@ -91,22 +91,22 @@ export function createSessionReplayPipeline(
             b
                 .sequentially((b) =>
                     b
-                        // Parse headers, then validate the ones capture guarantees (DLQ if missing)
+                        // Parse headers and apply restrictions (drop/overflow)
                         .pipe(createParseHeadersStep())
-                        .pipe(createValidateReplayHeadersStep())
-                        // Apply restrictions (drop/overflow)
                         .pipe(
                             createApplyEventRestrictionsStep(eventIngestionRestrictionManager, {
                                 overflowEnabled,
                                 preservePartitionLocality: true, // Sessions must stay on the same partition
                             })
                         )
+                        // Validate the headers capture guarantees (DLQ if missing) and narrow the type
+                        .pipe(createValidateSessionReplayHeadersStep())
                         // Validate team ownership and enrich with team context
                         .pipe(createTeamFilterStep(teamService))
                 )
                 // Resolve retention for the whole batch in one call, before the message is parsed and
-                // recorded — keyed on the session_id header. Sessions with unresolvable retention are
-                // dropped and those missing a session_id header are DLQ'd, before any parse or write.
+                // recorded — keyed on the (validated) session_id header. Sessions with unresolvable
+                // retention are dropped before any parse or write.
                 .gather()
                 .pipeBatchWithRetry(createResolveRetentionStep(retentionService), {
                     tries: 3,

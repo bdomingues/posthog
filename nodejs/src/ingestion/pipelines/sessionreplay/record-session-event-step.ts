@@ -11,7 +11,6 @@ import { ValueMatcher } from '~/types'
 export interface RecordSessionEventStepInput {
     team: TeamForReplay
     parsedMessage: ParsedMessageData
-    /** Resolved upstream by the resolve-retention batch step, before key generation. */
     retentionPeriod: RetentionPeriod
 }
 

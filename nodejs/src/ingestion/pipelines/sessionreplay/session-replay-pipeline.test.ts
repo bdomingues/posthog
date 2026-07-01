@@ -193,10 +193,13 @@ describe('session-replay-pipeline', () => {
         headers?: Record<string, string>
     ): Message {
         const actualSessionId = sessionId ?? `session-${offset}`
-        // Default to including token and session_id headers since they're required for metrics
+        // Default the headers the validate step requires; session_id/distinct_id must mirror the body.
         const headersWithDefaults = headers ?? { token: 'test-token' }
         if (!headersWithDefaults.session_id) {
             headersWithDefaults.session_id = actualSessionId
+        }
+        if (!headersWithDefaults.distinct_id) {
+            headersWithDefaults.distinct_id = 'user-123'
         }
         const kafkaHeaders = Object.entries(headersWithDefaults).map(([key, value]) => ({
             [key]: Buffer.from(value),
@@ -226,6 +229,9 @@ describe('session-replay-pipeline', () => {
         const headersWithDefaults = headers ?? { token: 'test-token' }
         if (!headersWithDefaults.session_id) {
             headersWithDefaults.session_id = sessionId
+        }
+        if (!headersWithDefaults.distinct_id) {
+            headersWithDefaults.distinct_id = 'user-123'
         }
         const kafkaHeaders = Object.entries(headersWithDefaults).map(([key, value]) => ({
             [key]: Buffer.from(value),
@@ -521,8 +527,13 @@ describe('session-replay-pipeline', () => {
                 token: 'team-token-123',
                 distinctId: 'user-456',
                 session_id: 'session-1',
+                distinct_id: 'user-123',
             })
-            expect(capturedHeaders[1]).toEqual({ token: 'team-token-789', session_id: 'session-2' })
+            expect(capturedHeaders[1]).toEqual({
+                token: 'team-token-789',
+                session_id: 'session-2',
+                distinct_id: 'user-123',
+            })
         })
 
         it('processes large batch with all messages passing through', async () => {
@@ -1002,8 +1013,13 @@ describe('session-replay-pipeline', () => {
             // Override parse headers to not include token in parsed headers, but still have it in message headers
             mockCreateParseHeadersStep.mockReturnValue(
                 (input: { message: Message; headers?: Record<string, string> }) => {
-                    // Return empty headers (no token); session_id is still needed for retention resolution
-                    return Promise.resolve(ok({ ...input, headers: { token: 'test-token', session_id: 'session-1' } }))
+                    // session_id/distinct_id must be present (validate) and mirror the body (parse consistency check)
+                    return Promise.resolve(
+                        ok({
+                            ...input,
+                            headers: { token: 'test-token', session_id: 'session-1', distinct_id: 'user-123' },
+                        })
+                    )
                 }
             )
 

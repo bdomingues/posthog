@@ -131,7 +131,11 @@ describe('ml-mirror-pipeline', () => {
             value: Buffer.from(payload),
             key: Buffer.from('k'),
             timestamp: Date.now(),
-            headers: [{ token: Buffer.from('test-token') }, { session_id: Buffer.from(sessionId) }],
+            headers: [
+                { token: Buffer.from('test-token') },
+                { session_id: Buffer.from(sessionId) },
+                { distinct_id: Buffer.from('user-123') },
+            ],
             size: payload.length,
         } as unknown as Message
     }
@@ -174,7 +178,11 @@ describe('ml-mirror-pipeline', () => {
             value: Buffer.from(payload),
             key: Buffer.from('k'),
             timestamp: Date.now(),
-            headers: [{ token: Buffer.from('test-token') }, { session_id: Buffer.from(sessionId) }],
+            headers: [
+                { token: Buffer.from('test-token') },
+                { session_id: Buffer.from(sessionId) },
+                { distinct_id: Buffer.from('user-123') },
+            ],
             size: payload.length,
         } as unknown as Message
     }

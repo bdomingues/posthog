@@ -3,45 +3,45 @@ import { ProcessingStep } from '~/ingestion/framework/steps'
 import { EventHeaders } from '~/types'
 
 /**
- * Session replay message headers, narrowed to the fields capture guarantees for the replay path and
- * that the pipeline relies on. Downstream replay steps take this instead of {@link EventHeaders} so
- * they can read `token`/`session_id` without re-checking for their presence.
+ * The message headers a session replay message is guaranteed to carry and that the pipeline consumes.
+ * These are exactly the fields capture sets for the replay path (see `rust/capture/src/events/recordings.rs`),
+ * narrowed to their required, non-optional form — downstream steps take this instead of the wide,
+ * all-optional {@link EventHeaders} so they can read them without re-checking.
  */
-export type SessionReplayHeaders = EventHeaders & {
+export interface SessionReplayHeaders {
     token: string
     session_id: string
+    distinct_id: string
 }
 
-export interface ValidateReplayHeadersStepInput {
+export interface ValidateSessionReplayHeadersStepInput {
     headers: EventHeaders
 }
 
 /**
- * Validates that a session replay message carries the headers capture guarantees, and narrows the
- * header type so downstream steps can trust them.
+ * Validates that a session replay message carries the headers capture guarantees, and replaces the
+ * wide header object with the narrowed {@link SessionReplayHeaders} so downstream steps can trust them.
  *
- * Capture's recordings handler rejects a snapshot before it reaches Kafka unless it has a token and a
- * valid `session_id` (see `rust/capture/src/events/recordings.rs`), so their absence here indicates a
- * bug upstream rather than bad user input — such messages are sent to the DLQ. Only the headers the
- * replay pipeline actually consumes are enforced; the rest of the guaranteed set is read from the
- * parsed payload, not the headers.
+ * Capture's recordings handler rejects a snapshot before it reaches Kafka unless it has a token, a
+ * valid `session_id`, and a `distinct_id` (see `rust/capture/src/events/recordings.rs`), so their
+ * absence here indicates a bug upstream rather than bad user input — such messages are sent to the DLQ.
  */
-export function createValidateReplayHeadersStep<T extends ValidateReplayHeadersStepInput>(): ProcessingStep<
-    T,
-    T & { headers: SessionReplayHeaders }
-> {
+export function createValidateSessionReplayHeadersStep<
+    T extends ValidateSessionReplayHeadersStepInput,
+>(): ProcessingStep<T, Omit<T, 'headers'> & { headers: SessionReplayHeaders }> {
     return async function validateReplayHeadersStep(input) {
-        const { headers } = input
+        const { token, session_id, distinct_id } = input.headers
 
-        if (!headers.token) {
+        if (!token) {
             return dlq('no_token_in_header')
         }
-        if (!headers.session_id) {
+        if (!session_id) {
             return dlq('no_session_id_in_header')
         }
+        if (!distinct_id) {
+            return dlq('no_distinct_id_in_header')
+        }
 
-        return Promise.resolve(
-            ok({ ...input, headers: { ...headers, token: headers.token, session_id: headers.session_id } })
-        )
+        return Promise.resolve(ok({ ...input, headers: { token, session_id, distinct_id } }))
     }
 }

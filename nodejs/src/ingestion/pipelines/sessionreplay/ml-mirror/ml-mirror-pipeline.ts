@@ -20,7 +20,7 @@ import { createParseMessageStep } from '~/ingestion/pipelines/sessionreplay/pars
 import { createRecordSessionEventStep } from '~/ingestion/pipelines/sessionreplay/record-session-event-step'
 import { createResolveRetentionStep } from '~/ingestion/pipelines/sessionreplay/session-batch-resolve-retention-step'
 import { createTeamFilterStep } from '~/ingestion/pipelines/sessionreplay/team-filter-step'
-import { createValidateReplayHeadersStep } from '~/ingestion/pipelines/sessionreplay/validate-headers-step'
+import { createValidateSessionReplayHeadersStep } from '~/ingestion/pipelines/sessionreplay/validate-headers-step'
 
 export type MlMirrorReplayPipelineConfig = SessionReplayPipelineConfig & {
     /** Shared, immutable scrub context (allow lists + tunables). */
@@ -57,19 +57,19 @@ export function createMlMirrorReplayPipeline(
                 .sequentially((b) =>
                     b
                         .pipe(createParseHeadersStep())
-                        .pipe(createValidateReplayHeadersStep())
                         .pipe(
                             createApplyEventRestrictionsStep(eventIngestionRestrictionManager, {
                                 overflowEnabled,
                                 preservePartitionLocality: true,
                             })
                         )
+                        .pipe(createValidateSessionReplayHeadersStep())
                         .pipe(createTeamFilterStep(teamService))
                         // Mirror only data from orgs that opted into AI training.
                         .pipe(createAiTrainingOptInFilterStep())
                 )
-                // Resolve retention up front (before parse), keyed on the session_id header; drop
-                // unresolvable sessions and DLQ those missing a session_id header.
+                // Resolve retention up front (before parse), keyed on the (validated) session_id
+                // header; drop unresolvable sessions.
                 .gather()
                 .pipeBatchWithRetry(createResolveRetentionStep(retentionService), {
                     tries: 3,

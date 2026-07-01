@@ -18,7 +18,7 @@ describe('createResolveRetentionStep', () => {
     const element = (teamId: number, sessionId: string): { team: TeamForReplay; headers: SessionReplayHeaders } =>
         ({
             team: { teamId, consoleLogIngestionEnabled: false, aiTrainingOptedIn: true },
-            headers: { token: 'token', session_id: sessionId },
+            headers: { token: 'token', session_id: sessionId, distinct_id: 'distinct-1' },
         }) as unknown as { team: TeamForReplay; headers: SessionReplayHeaders }
 
     beforeEach(() => {

@@ -1,13 +1,12 @@
 import { PipelineResultType } from '~/ingestion/framework/results'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
-import { createTestEventHeaders } from '~/tests/helpers/event-headers'
 
 import { TeamFilterStepInput, TeamTokenResolver, createTeamFilterStep } from './team-filter-step'
 
 describe('createTeamFilterStep', () => {
-    // Token/session_id are guaranteed by the upstream validate step, so they're always present here.
+    // Headers are guaranteed by the upstream validate step, so they're always present here.
     const createInput = (token: string): TeamFilterStepInput => ({
-        headers: { ...createTestEventHeaders({ token }), token, session_id: 'session-1' },
+        headers: { token, session_id: 'session-1', distinct_id: 'distinct-1' },
     })
 
     const defaultTeam: TeamForReplay = {

@@ -19,7 +19,7 @@ export interface TeamFilterStepOutput {
  * Creates a step that validates team ownership and enriches messages with team context.
  * This step is additive - it preserves all input properties and adds team context.
  *
- * Runs after {@link createValidateReplayHeadersStep}, so the token is guaranteed present.
+ * Runs after {@link createValidateSessionReplayHeadersStep}, so the token is guaranteed present.
  *
  * Error handling:
  * - DROP: Team not found or disabled (intentional business logic)

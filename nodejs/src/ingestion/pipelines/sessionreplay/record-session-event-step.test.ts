@@ -34,7 +34,6 @@ describe('createRecordSessionEventStep', () => {
             timestamp: 1234567890,
             rawSize: 100,
         },
-        headers: [],
         distinct_id: 'user-123',
         session_id: 'session-456',
         token: 'test-token',

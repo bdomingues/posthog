@@ -14,7 +14,7 @@ import { SessionReplayHeaders } from './validate-headers-step'
  * parsed and recorded — so retention is resolved off the S3 write path, and a session bound for the
  * wrong retention is never parsed or written.
  *
- * Keys on the `session_id` header, which {@link createValidateReplayHeadersStep} guarantees is
+ * Keys on the `session_id` header, which {@link createValidateSessionReplayHeadersStep} guarantees is
  * present. A session whose retention can't be resolved (deleted/unknown team, invalid value) is
  * dropped. A transient failure (e.g. Redis) is thrown by the service so the pipeline's retry wrapper
  * can re-run the step.
