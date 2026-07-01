@@ -21,10 +21,6 @@ import {
     SessionRecordingIngesterCollaborators,
 } from '~/ingestion/pipelines/sessionreplay/consumer'
 import { MlMirrorConfig, getDefaultMlMirrorConfig } from '~/ingestion/pipelines/sessionreplay/ml-mirror/config'
-import {
-    releaseImageKeys,
-    reserveImageKeys,
-} from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/redis-dedup'
 import { MlBlockMetadataSink } from '~/ingestion/pipelines/sessionreplay/ml-mirror/ml-block-metadata-sink'
 import { createMlMirrorReplayPipeline } from '~/ingestion/pipelines/sessionreplay/ml-mirror/ml-mirror-pipeline'
 import { resolvePseudonymKey } from '~/ingestion/pipelines/sessionreplay/ml-mirror/pseudonym-key'
@@ -44,7 +40,11 @@ import { buildSessionRecordingS3Client } from '~/ingestion/pipelines/sessionrepl
 
 import { RedisPool } from '../types'
 import { CleanupResources, NodeServer, ServerLifecycle } from './base-server'
-import { IngestionSessionReplayServerConfig, buildSessionReplayRedisPools } from './ingestion-session-replay-server'
+import {
+    IngestionSessionReplayServerConfig,
+    buildSessionReplayRedisPools,
+    buildSessionReplayRedisV2,
+} from './ingestion-session-replay-server'
 
 /** Full config for an ML mirror deployment: the primary replay config plus ML knobs. */
 export type IngestionSessionReplayMlMirrorServerConfig = IngestionSessionReplayServerConfig & MlMirrorConfig
@@ -125,11 +125,27 @@ export class IngestionSessionReplayMlMirrorServer implements NodeServer {
         // separate consumer worker scrubs them to S3. Off by default (kill-switch) so the producer path
         // stays inert until the consumer is live; when off, those images fall back to the in-process blur.
         if (this.config.SESSION_RECORDING_ML_IMAGE_SCRUB_ENABLED) {
-            const redisPool = pools.redisPool
+            const redis = buildSessionReplayRedisV2(this.config)
             const producer = this.producerRegistry.getProducer(INGESTION_SESSIONREPLAY_PRODUCER)
             scrubContext.imageScrub = {
-                reserve: (keys, ttlSeconds) => reserveImageKeys(redisPool, keys, ttlSeconds),
-                release: (keys) => releaseImageKeys(redisPool, keys),
+                // Reserve every key in one pipelined round-trip; 'OK' = fresh (post it), nil = duplicate.
+                // No failOpen — a Redis error throws, so the fail-closed pipeline drops the message rather
+                // than record references for images it never confirmed as posted.
+                reserve: async (keys, ttlSeconds) => {
+                    const raw = await redis.usePipeline({ name: 'image_scrub_reserve' }, (pipeline) => {
+                        for (const key of keys) {
+                            pipeline.set(key, '1', 'EX', ttlSeconds, 'NX')
+                        }
+                    })
+                    return (raw ?? []).map(([err, res]) => !err && res === 'OK')
+                },
+                release: async (keys) => {
+                    await redis.usePipeline({ name: 'image_scrub_release' }, (pipeline) => {
+                        for (const key of keys) {
+                            pipeline.del(key)
+                        }
+                    })
+                },
                 // One produce per fresh image; resolves once the broker acks them all.
                 produce: async (messages) => {
                     await Promise.all(
