@@ -1332,8 +1332,10 @@ describe('SessionBatchRecorder', () => {
         })
     })
 
+    // The record-metrics flush step derives the flush counters (batches / sessions / events / bytes)
+    // from this returned metadata, so assert the metric-shaped totals off the metadata here.
     describe('flushed block metadata', () => {
-        it('returns a block per flushed session', async () => {
+        it('reports one block per session with the total event and byte counts', async () => {
             const messages = [
                 createMessage('session1', [
                     {
@@ -1361,8 +1363,9 @@ describe('SessionBatchRecorder', () => {
             }
             const metadata = await flushRecorder(recorder)
 
-            expect(metadata).toHaveLength(2) // Two sessions
+            expect(metadata).toHaveLength(2) // Two sessions flushed
             expect(metadata.reduce((sum, block) => sum + block.eventCount, 0)).toBe(3) // Three events total
+            expect(metadata.reduce((sum, block) => sum + block.blockLength, 0)).toBe(200) // Two 100-byte blocks
         })
 
         it('returns empty metadata when there is nothing to flush', async () => {
@@ -1428,7 +1431,9 @@ describe('SessionBatchRecorder', () => {
             for (const message of messages) {
                 await recorder.record(message)
             }
-            expect(await flushRecorder(recorder)).toHaveLength(2) // Two sessions
+            const firstFlush = await flushRecorder(recorder)
+            expect(firstFlush).toHaveLength(2) // Two sessions
+            expect(firstFlush.reduce((sum, block) => sum + block.eventCount, 0)).toBe(2) // Two events
 
             // Nothing left after the first flush
             expect(await flushRecorder(recorder)).toHaveLength(0)
@@ -1441,7 +1446,9 @@ describe('SessionBatchRecorder', () => {
                 },
             ])
             await recorder.record(message3)
-            expect(await flushRecorder(recorder)).toHaveLength(1) // Only the new session
+            const thirdFlush = await flushRecorder(recorder)
+            expect(thirdFlush).toHaveLength(1) // Only the new session
+            expect(thirdFlush.reduce((sum, block) => sum + block.eventCount, 0)).toBe(1) // Only the new event
         })
     })
 
