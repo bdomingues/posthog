@@ -1,5 +1,5 @@
 /**
- * Routing policy: given an inlined replay image, decide how the ml-mirror producer handles it.
+ * Scrub-method policy: given an inlined replay image, decide how the ml-mirror producer handles it.
  *
  *  - 'passthrough': leave the image untouched. Only for images below the detectors' floor (<=16px),
  *    where no face/text could be found anyway, so scrubbing would lose zero protection while
@@ -11,7 +11,7 @@
  *    S3. For static <img>/media raster, which dedups well (logos/avatars/photos) and is PII-bearing.
  */
 export type ImageSource = 'canvas' | 'img' | 'media'
-export type ScrubRoute = 'passthrough' | 'cheapBlur' | 'advancedScrub'
+export type ScrubMethod = 'passthrough' | 'cheapBlur' | 'advancedScrub'
 
 export const TINY_MAX_SIDE = 16 // <= this on the long side => below the face/text detector floor
 // A genuine <=16px image is a few hundred bytes; require the bytes to be small too, so a crafted tiny
@@ -19,7 +19,7 @@ export const TINY_MAX_SIDE = 16 // <= this on the long side => below the face/te
 export const TINY_MAX_BYTES = 4096
 export const TOPIC_MAX_BYTES = 900_000 // under Kafka's ~1MB message cap, leaving room for the envelope
 
-export interface RouteInput {
+export interface ImageMetadata {
     source: ImageSource
     /** Pixel dimensions if known (from rrweb attrs or a header decode); omit if unknown. */
     width?: number
@@ -28,7 +28,7 @@ export interface RouteInput {
     byteLength: number
 }
 
-export function routeImage(i: RouteInput): ScrubRoute {
+export function getScrubMethodForImage(i: ImageMetadata): ScrubMethod {
     // 1. Tiny + high-signal + below the detector floor -> keep as-is. Requires BOTH the declared
     //    dimensions and the actual byte size to be tiny: dimensions come from untrusted rrweb attrs,
     //    so the byte floor stops a crafted 1x1 from shielding a large image. Unknown-size => scrubbed.

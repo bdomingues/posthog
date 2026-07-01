@@ -1,6 +1,6 @@
 import { hashImageBytes, imageRef, isImageRef } from './content-ref'
 import { type ImageInput, type ImageScrubEmitDeps, type TopicMessage, emitImagesForScrub } from './producer'
-import { routeImage } from './routing'
+import { getScrubMethodForImage } from './scrub-method'
 
 /** In-memory reserve/release/produce that counts round-trips, so we can assert one call per batch.
  *  Mirrors the ordered semantics of a Redis SET NX pipeline: within one batch the first occurrence of
@@ -82,34 +82,48 @@ describe('ml-mirror/image-scrub', () => {
         })
     })
 
-    describe('routeImage', () => {
+    describe('getScrubMethodForImage', () => {
         it('passes tiny images through, for any source', () => {
-            expect(routeImage({ source: 'img', width: 16, height: 8, byteLength: 200 })).toBe('passthrough')
-            expect(routeImage({ source: 'canvas', width: 10, height: 10, byteLength: 200 })).toBe('passthrough')
+            expect(getScrubMethodForImage({ source: 'img', width: 16, height: 8, byteLength: 200 })).toBe('passthrough')
+            expect(getScrubMethodForImage({ source: 'canvas', width: 10, height: 10, byteLength: 200 })).toBe(
+                'passthrough'
+            )
         })
 
         it('does NOT pass through a large image with crafted tiny dimensions (byte floor)', () => {
             // rrweb width/height are attacker-controlled; a 1x1 declared on a 900KB image must still be
             // scrubbed, not passed through unredacted.
-            expect(routeImage({ source: 'img', width: 1, height: 1, byteLength: 900_000 })).toBe('advancedScrub')
-            expect(routeImage({ source: 'img', width: 16, height: 16, byteLength: 50_000 })).toBe('advancedScrub')
+            expect(getScrubMethodForImage({ source: 'img', width: 1, height: 1, byteLength: 900_000 })).toBe(
+                'advancedScrub'
+            )
+            expect(getScrubMethodForImage({ source: 'img', width: 16, height: 16, byteLength: 50_000 })).toBe(
+                'advancedScrub'
+            )
         })
 
         it('routes canvas to the cheap in-process blur (dynamic, no dedup)', () => {
-            expect(routeImage({ source: 'canvas', width: 800, height: 600, byteLength: 5000 })).toBe('cheapBlur')
+            expect(getScrubMethodForImage({ source: 'canvas', width: 800, height: 600, byteLength: 5000 })).toBe(
+                'cheapBlur'
+            )
         })
 
         it('falls back to cheap when too big for the topic', () => {
-            expect(routeImage({ source: 'img', width: 4000, height: 4000, byteLength: 2_000_000 })).toBe('cheapBlur')
+            expect(getScrubMethodForImage({ source: 'img', width: 4000, height: 4000, byteLength: 2_000_000 })).toBe(
+                'cheapBlur'
+            )
         })
 
         it('routes static <img>/media raster to the advanced topic path', () => {
-            expect(routeImage({ source: 'img', width: 300, height: 300, byteLength: 5000 })).toBe('advancedScrub')
-            expect(routeImage({ source: 'media', width: 300, height: 300, byteLength: 5000 })).toBe('advancedScrub')
+            expect(getScrubMethodForImage({ source: 'img', width: 300, height: 300, byteLength: 5000 })).toBe(
+                'advancedScrub'
+            )
+            expect(getScrubMethodForImage({ source: 'media', width: 300, height: 300, byteLength: 5000 })).toBe(
+                'advancedScrub'
+            )
         })
 
         it('scrubs unknown-size images rather than passing them through', () => {
-            expect(routeImage({ source: 'img', byteLength: 5000 })).toBe('advancedScrub')
+            expect(getScrubMethodForImage({ source: 'img', byteLength: 5000 })).toBe('advancedScrub')
         })
     })
 

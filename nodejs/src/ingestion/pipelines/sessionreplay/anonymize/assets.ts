@@ -1,5 +1,8 @@
 /** Media detection + placeholder/blur dispatch. */
-import { ImageSource, routeImage } from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/routing'
+import {
+    ImageSource,
+    getScrubMethodForImage,
+} from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/scrub-method'
 
 import { BLANK_IMAGE_DATA_URI, blurImageBytes, isImageDataUri } from './blur'
 import { ScrubContext } from './config'
@@ -90,13 +93,13 @@ function scrubInlineImage(
     if (bytes === null) {
         return false
     }
-    const route = routeImage({
+    const scrubMethod = getScrubMethodForImage({
         source,
         width: toDim(attrs.width),
         height: toDim(attrs.height),
         byteLength: bytes.length,
     })
-    if (route === 'passthrough') {
+    if (scrubMethod === 'passthrough') {
         return false
     }
     const jobs = ctx.imageScrubJobs
@@ -104,7 +107,7 @@ function scrubInlineImage(
         jobs != null &&
         jobs.length < MAX_ADVANCED_IMAGES_PER_MESSAGE &&
         jobs.reduce((n, j) => n + j.bytes.length, bytes.length) <= MAX_ADVANCED_BYTES_PER_MESSAGE
-    if (route === 'advancedScrub' && ctx.imageScrub && ctx.teamId != null && jobs != null && underCap) {
+    if (scrubMethod === 'advancedScrub' && ctx.imageScrub && ctx.teamId != null && jobs != null && underCap) {
         attrs[name] = placeholder // fail-safe until the reference is written in place after the emit
         jobs.push({
             bytes,
