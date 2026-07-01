@@ -43,6 +43,45 @@ jobs:
                         - 'Dockerfile.ml-mirror-image-scrub'
                         - '.github/workflows/ci-ml-mirror-image-scrub-container.yml'
 
+    test:
+        needs: changes
+        name: Unit-test ml-mirror-image-scrub
+        if: |
+            (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.changes.outputs.scrub_files == 'true') ||
+            github.event_name == 'merge_group'
+        runs-on: ubuntu-24.04
+        timeout-minutes: 10
+        permissions:
+            contents: read
+        defaults:
+            run:
+                working-directory: products/replay_vision/services/ml-mirror-image-scrub
+        steps:
+            - name: Check out
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+            - name: Set up Node
+              uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+              with:
+                  node-version-file: .nvmrc
+
+            - name: Install dependencies
+              # Standalone package: own lockfile, outside the root pnpm workspace, so ignore the workspace.
+              run: corepack enable && CI=1 pnpm install --frozen-lockfile --ignore-workspace
+
+            - name: Lint
+              run: pnpm lint
+
+            - name: Format check
+              run: pnpm format:check
+
+            - name: Typecheck
+              # jest runs through babel (no type errors), so tsc is the only thing that typechecks the worker.
+              run: pnpm typecheck
+
+            - name: Run unit tests
+              run: pnpm test:unit
+
     build:
         needs: changes
         name: Build and push ml-mirror-image-scrub image
