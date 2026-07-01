@@ -1,19 +1,21 @@
 """Tests for the slash command webhook view.
 
-The parser and dispatcher are covered by their own tests — this file exercises
-the new entry point's responsibilities: request validation, retry handling,
-region routing, user resolution, and the bridge into ``dispatch_rules_command``.
+The parser, dispatcher, and command workflow are covered by their own tests —
+this file exercises the entry point's responsibilities: request validation,
+retry handling, region routing, and handing a mention-shaped event plus the
+``/posthog`` surface to the command workflow.
 """
 
 from typing import Any
 from urllib.parse import urlencode
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from django.core.cache import cache
 from django.test import TestCase
 from django.test.client import RequestFactory
 
+from parameterized import parameterized
 from rest_framework.test import APIClient
 
 from posthog.helpers.slack_scopes import REQUIRED_SLACK_SCOPES
@@ -68,7 +70,7 @@ class _SlashCommandTestBase(TestCase):
         )
         self._mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
 
-    def _post_slash_command(self, payload: dict[str, str], **extra_headers: str) -> Any:
+    def _post_slash_command(self, payload: dict[str, str]) -> Any:
         body = urlencode(payload).encode()
         signature, ts = sign_slack_request(body, SIGNING_SECRET)
         return self.client.post(
@@ -77,7 +79,6 @@ class _SlashCommandTestBase(TestCase):
             content_type="application/x-www-form-urlencoded",
             HTTP_X_SLACK_SIGNATURE=signature,
             HTTP_X_SLACK_REQUEST_TIMESTAMP=ts,
-            **extra_headers,
         )
 
     def _default_payload(self, **overrides: str) -> dict[str, str]:
@@ -115,51 +116,40 @@ class TestSlashCommandWebhookValidation(_SlashCommandTestBase):
 class TestSlashCommandDispatch(_SlashCommandTestBase):
     def setUp(self) -> None:
         super().setUp()
-        # Replacing ``SlackIntegration`` wholesale shadows the per-attribute ``slack_config``
-        # patch on the base class — re-stub ``slack_config`` on the class mock so signature
-        # validation still finds the test signing secret.
-        mock_slack_cls = self.enterContext(patch("products.slack_app.backend.views.slack_command.SlackIntegration"))
-        mock_slack_cls.slack_config.return_value = {"SLACK_APP_SIGNING_SECRET": SIGNING_SECRET}
-        mock_slack_cls.return_value.missing_scopes.return_value = frozenset()
-        self.mock_dispatch = self.enterContext(
-            patch("products.slack_app.backend.views.slack_command.dispatch_rules_command")
+        # The entry point hands off to the durable command workflow (a Temporal
+        # start — a genuine boundary), then acks Slack. Stub the start so tests
+        # assert on the synthesised event and surface it forwards.
+        self.mock_start = self.enterContext(
+            patch("products.slack_app.backend.views.slack_command._start_command_workflow")
         )
-        # Slash-command dispatch runs on a background thread so Slack's 3-second ack budget
-        # is never blocked by ``users.info`` / ``chat_postMessage``. In tests we drop the
-        # thread and run the target inline so assertions can still see ``dispatch_rules_command``
-        # being called before the test method returns. ``close_old_connections`` in the worker
-        # would close the outer test-case transaction's connection, so stub it out.
-        self.enterContext(patch("products.slack_app.backend.views.slack_command.close_old_connections"))
-        thread_patch = self.enterContext(patch("products.slack_app.backend.views.slack_command.threading.Thread"))
 
-        def _run_inline(*_args: Any, target: Any, kwargs: dict, **_thread_kwargs: Any) -> Any:
-            thread = MagicMock()
-            thread.start.side_effect = lambda: target(**kwargs)
-            return thread
-
-        thread_patch.side_effect = _run_inline
-
-    def test_help_invokes_dispatch_with_help_action(self) -> None:
-        response = self._post_slash_command(self._default_payload(text="help"))
+    @parameterized.expand(
+        [
+            ("explicit_help", "help", "help"),
+            # A bare ``/posthog`` (empty text) is treated as ``/posthog help``.
+            ("bare_falls_back_to_help", "", "help"),
+            ("rules_list", "rules list", "rules list"),
+            ("project_set", "project 42", "project 42"),
+        ]
+    )
+    def test_known_subcommand_starts_command_workflow(self, _name: str, text: str, expected_event_text: str) -> None:
+        response = self._post_slash_command(self._default_payload(text=text))
 
         assert response.status_code == 200
         assert response.content == b""
-        self.mock_dispatch.assert_called_once()
-        call = self.mock_dispatch.call_args
-        parsed = call.args[0]
-        assert parsed.action == "help"
-        assert call.kwargs["slack_user_id"] == "U123"
-        assert call.kwargs["slack_workspace_id"] == "T12345"
+        self.mock_start.assert_called_once()
+        event = self.mock_start.call_args.args[0]
+        # The workflow re-parses the text, so the entry point's job is to forward
+        # a faithful mention-shaped event, not a parsed command.
+        assert event["text"] == expected_event_text
+        assert event["channel"] == "C001"
+        assert event["user"] == "U123"
+        # User resolution is deferred to the workflow to keep the ack under 3s.
+        assert self.mock_start.call_args.kwargs["user_id"] is None
         # ``command_prefix`` is what surfaces in user-facing help/error copy — must
         # match the entry point so the strings tell users to type ``/posthog ...``.
-        assert call.kwargs["command_prefix"] == "/posthog"
-
-    def test_empty_text_falls_back_to_help(self) -> None:
-        response = self._post_slash_command(self._default_payload(text=""))
-
-        assert response.status_code == 200
-        self.mock_dispatch.assert_called_once()
-        assert self.mock_dispatch.call_args.args[0].action == "help"
+        assert self.mock_start.call_args.kwargs["command_prefix"] == "/posthog"
+        assert self.integration in self.mock_start.call_args.args[1]
 
     def test_unknown_sub_command_returns_help_text(self) -> None:
         response = self._post_slash_command(self._default_payload(text="frobnicate the widgets"))
@@ -168,33 +158,21 @@ class TestSlashCommandDispatch(_SlashCommandTestBase):
         body = response.json()
         assert body["response_type"] == "ephemeral"
         assert "didn't recognize" in body["text"]
-        self.mock_dispatch.assert_not_called()
+        self.mock_start.assert_not_called()
 
-    def test_rules_list_dispatches_list_action(self) -> None:
-        response = self._post_slash_command(self._default_payload(text="rules list"))
-
-        assert response.status_code == 200
-        self.mock_dispatch.assert_called_once()
-        assert self.mock_dispatch.call_args.args[0].action == "list"
-
-    def test_project_set_parses_team_id(self) -> None:
-        response = self._post_slash_command(self._default_payload(text=f"project {self.team.id}"))
-
-        assert response.status_code == 200
-        self.mock_dispatch.assert_called_once()
-        parsed = self.mock_dispatch.call_args.args[0]
-        assert parsed.action == "project_set"
-        assert parsed.project_team_id == self.team.id
-
-    def test_thread_ts_flows_through_to_dispatcher(self) -> None:
+    def test_thread_ts_flows_through_to_workflow(self) -> None:
         """Slash commands invoked inside a thread carry ``thread_ts`` on the payload;
         passing it through keeps the bot's reply in-thread instead of dropping it at
-        the bottom of the channel."""
-        response = self._post_slash_command(self._default_payload(text="rules list", thread_ts="1700000000.001"))
+        the bottom of the channel. Outside a thread the key is absent so the reply
+        lands at the channel root."""
+        in_thread = self._post_slash_command(self._default_payload(text="rules list", thread_ts="1700000000.001"))
+        assert in_thread.status_code == 200
+        assert self.mock_start.call_args.args[0]["thread_ts"] == "1700000000.001"
 
-        assert response.status_code == 200
-        self.mock_dispatch.assert_called_once()
-        assert self.mock_dispatch.call_args.kwargs["thread_ts"] == "1700000000.001"
+        self.mock_start.reset_mock()
+        outside_thread = self._post_slash_command(self._default_payload(text="rules list"))
+        assert outside_thread.status_code == 200
+        assert "thread_ts" not in self.mock_start.call_args.args[0]
 
 
 class TestSlashCommandWorkspaceMissing(_SlashCommandTestBase):
