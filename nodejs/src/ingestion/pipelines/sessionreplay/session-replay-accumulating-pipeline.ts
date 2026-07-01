@@ -116,8 +116,8 @@ export function createSessionReplayAccumulatingPipeline(
         Record<string, never>,
         OverflowOutput
     >({
-        pipeline: recordPipeline,
         beforeBatch: (builder) => builder.pipe(beforeBatchStep),
+        pipeline: recordPipeline,
         flush: (builder) => builder.sequentially((b) => b.pipe(resolveRetentionStep).pipe(writeStep)),
         shouldFlush: (batchContext) => batchContext.sessionBatchRecorder.size >= maxBatchSizeBytes,
         maxBatchAgeMs,

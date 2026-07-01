@@ -108,8 +108,8 @@ describe('AccumulatingPipeline', () => {
             number[],
             Record<string, never>
         >({
-            pipeline: new FoldingRecordPipeline(),
             beforeBatch: beforePipeline,
+            pipeline: new FoldingRecordPipeline(),
             shouldFlush: (batchContext) => batchContext.records.length >= options.flushAt,
             maxBatchAgeMs: options.maxBatchAgeMs ?? 60_000,
             flushPipeline: new RecordsFlushPipeline(),
@@ -289,8 +289,8 @@ describe('AccumulatingPipeline', () => {
             number[],
             Record<string, never>
         >({
-            pipeline: new FoldingRecordPipeline(),
             beforeBatch: beforePipeline,
+            pipeline: new FoldingRecordPipeline(),
             shouldFlush: () => false,
             maxBatchAgeMs: 60_000,
             flushPipeline: new RecordsFlushPipeline(),
@@ -333,8 +333,8 @@ describe('AccumulatingPipeline', () => {
             number[],
             Record<string, never>
         >({
-            pipeline: new FoldingRecordPipeline(),
             beforeBatch: beforePipeline,
+            pipeline: new FoldingRecordPipeline(),
             shouldFlush: () => false,
             maxBatchAgeMs: 60_000,
             flushPipeline: new RecordsFlushPipeline(),

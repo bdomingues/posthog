@@ -96,10 +96,10 @@ export function newAccumulatingPipeline<
     CFlushOut = Record<string, never>,
     R extends string = never,
 >(config: {
-    pipeline: BatchPipeline<TRecordIn & CBatch & AccumulationContext, TRecordOut, CRecordIn, CRecordOut, R>
     beforeBatch: (
         builder: StartPipelineBuilder<BeforeAccumulationInput, Record<string, never>>
     ) => PipelineBuilder<BeforeAccumulationInput, BeforeAccumulationOutput<CBatch>, Record<string, never>>
+    pipeline: BatchPipeline<TRecordIn & CBatch & AccumulationContext, TRecordOut, CRecordIn, CRecordOut, R>
     flush: (
         builder: BatchPipelineBuilder<CBatch & AccumulationContext, CBatch & AccumulationContext, Record<string, never>>
     ) => BatchPipelineBuilder<CBatch & AccumulationContext, TFlushOut, Record<string, never>, CFlushOut, R>

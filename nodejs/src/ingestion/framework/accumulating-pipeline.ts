@@ -110,17 +110,17 @@ export class AccumulatingPipeline<
     // via waitForActivity(); it is the liveness mechanism for a future wake-driven drain loop.
     private signal = new ResettableSignal()
 
+    private readonly beforePipeline: Pipeline<
+        BeforeAccumulationInput,
+        BeforeAccumulationOutput<CBatch>,
+        Record<string, never>
+    >
     private readonly pipeline: BatchPipeline<
         TRecordIn & CBatch & AccumulationContext,
         TRecordOut,
         CRecordIn,
         CRecordOut,
         R
-    >
-    private readonly beforePipeline: Pipeline<
-        BeforeAccumulationInput,
-        BeforeAccumulationOutput<CBatch>,
-        Record<string, never>
     >
     private readonly flushPipeline: BatchPipeline<
         CBatch & AccumulationContext,
@@ -144,8 +144,8 @@ export class AccumulatingPipeline<
             R
         >
     ) {
-        this.pipeline = config.pipeline
         this.beforePipeline = config.beforeBatch
+        this.pipeline = config.pipeline
         this.flushPipeline = config.flushPipeline
         this.shouldFlush = config.shouldFlush
         this.maxBatchAgeMs = config.maxBatchAgeMs
