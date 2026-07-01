@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from django.http import HttpRequest
 
 from products.approvals.backend import decorators
+from products.approvals.backend.exceptions import PolicyConflict
 from products.approvals.backend.models import ChangeRequest, ChangeRequestState, ValidationStatus
 from products.approvals.backend.services import apply_change_request
 
@@ -77,6 +78,11 @@ def gate_scheduled_change(flag: "FeatureFlag", payload: dict[str, Any], user) ->
     payload would apply, otherwise ``None`` (no policy, approvals disabled, or the change doesn't
     match any gated action). Reuses the request-time gate's action detection and CR creation so
     creation-time gating and request-time gating stay in lockstep.
+
+    Raises ``PolicyConflict`` when the change matches more than one enabled policy: a single
+    ``ChangeRequest`` can only carry one approval, so binding one would let the other policy's
+    gated change ride along unapproved. We fail closed rather than save the row ungated — callers
+    surface this as a 400 (creation/update) or skip the change (copy / recurring re-gate).
     """
     # Deferred: feature_flags' serializer/actions transitively import posthog.tasks, which imports
     # this module — eager imports would create a circular import at startup.
@@ -149,6 +155,16 @@ def gate_scheduled_change(flag: "FeatureFlag", payload: dict[str, Any], user) ->
         kwargs={},
     )
 
+    if result.action == "policy_conflict":
+        # Multiple enabled policies match this change. We can't bind a single CR that satisfies
+        # all of them, and returning None here would save the schedule ungated and let the Celery
+        # applier dispatch it with no approval. Fail closed.
+        raise PolicyConflict(
+            conflicting_policies=result.conflicting_policies,
+            message=result.error_message or "This change matches multiple approval policies",
+            guidance="Split your changes into separate scheduled changes to address each policy independently",
+        )
+
     if result.action in ("require_approval", "duplicate"):
         return result.change_request
 
@@ -205,6 +221,10 @@ def regate_recurring_scheduled_change(scheduled_change: "ScheduledChange") -> Op
     A bound ChangeRequest is single-use — it carries one occurrence's intent. When a recurring
     schedule advances to its next fire, re-run the gate against the flag's current state so the
     next occurrence is independently gated. Returns the new CR (or None if no policy now applies).
+
+    May raise ``PolicyConflict`` when the next occurrence would match multiple policies; the
+    scheduled-change task's error handling then records the failure and stops advancing the
+    schedule rather than dispatching the occurrence ungated.
     """
     from products.feature_flags.backend.models.feature_flag import FeatureFlag  # noqa: PLC0415
 

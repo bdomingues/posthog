@@ -21,6 +21,7 @@ from posthog.rbac.user_access_control import UserAccessControl
 from posthog.user_permissions import UserPermissions
 from posthog.utils import safe_int
 
+from products.approvals.backend.exceptions import PolicyConflict
 from products.approvals.backend.scheduled_changes import gate_scheduled_change
 from products.cohorts.backend.models.cohort import Cohort, CohortOrEmpty
 from products.feature_flags.backend.api.feature_flag import FeatureFlagSerializer
@@ -617,7 +618,17 @@ class OrganizationFeatureFlagView(
 
             # Gate the copied schedule against the target flag's policies, same as a directly
             # created schedule — a copy that would enable/roll out a flag still needs approval.
-            change_request = gate_scheduled_change(target_flag, updated_payload, user)
+            try:
+                change_request = gate_scheduled_change(target_flag, updated_payload, user)
+            except PolicyConflict:
+                # The copied change matches multiple policies on the target and can't be gated
+                # with a single CR. Skip it (fail closed) rather than copy it ungated — mirroring
+                # the permission skip above, we don't fail the whole copy over one schedule.
+                logger.warning(
+                    "Skipping copy of scheduled change that conflicts with multiple target policies",
+                    target_flag_id=target_flag.id,
+                )
+                continue
 
             ScheduledChange.objects.create(
                 record_id=str(target_flag.id),

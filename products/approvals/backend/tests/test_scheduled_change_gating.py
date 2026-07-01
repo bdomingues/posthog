@@ -89,11 +89,13 @@ class TestScheduledChangeGating(APIBaseTest):
         scheduled.change_request.refresh_from_db()
         assert scheduled.change_request.state == ChangeRequestState.EXPIRED
 
-    def test_scheduled_enable_applies_via_approved_path_when_cr_approved(self, _mock_enabled):
+    def test_approving_scheduled_cr_defers_apply_to_fire_time(self, _mock_enabled):
+        # A scheduled change's CR must not apply on approval: reaching quorum before scheduled_at
+        # would let an approver fire a future-dated flag change early. The CR stays APPROVED and
+        # only the scheduled applier flips the flag once the fire window is reached.
         self._enable_policy()
         flag = self._disabled_flag()
 
-        # Schedule in the future so the applier doesn't expire it before we approve.
         scheduled = self._schedule(
             flag,
             {"operation": "update_status", "value": True},
@@ -103,13 +105,11 @@ class TestScheduledChangeGating(APIBaseTest):
         assert cr is not None
 
         ChangeRequestService(cr, self.user).approve()
+
         cr.refresh_from_db()
-        # Approve auto-applies on quorum; but the scheduled change applies it via process(). To keep
-        # the approved-then-process path honest, reset state to APPROVED if quorum auto-applied.
-        if cr.state == ChangeRequestState.APPLIED:
-            flag.refresh_from_db()
-            assert flag.active is True
-            return
+        assert cr.state == ChangeRequestState.APPROVED
+        flag.refresh_from_db()
+        assert flag.active is False
 
         # Move the fire window into the past and let the applier apply via the approved path.
         scheduled.scheduled_at = timezone.now() - timedelta(seconds=30)
@@ -173,6 +173,36 @@ class TestScheduledChangeGating(APIBaseTest):
         assert 90 not in rollouts
         scheduled.change_request.refresh_from_db()
         assert scheduled.change_request.state == ChangeRequestState.EXPIRED
+
+    def test_scheduled_change_matching_multiple_policies_is_rejected(self, _mock_enabled):
+        # A scheduled enable that matches more than one enabled policy can't be bound to a single
+        # CR. It must fail closed at creation (400) with no row, rather than save ungated and let
+        # the Celery applier dispatch it with no approval at all.
+        self._enable_policy()
+        ApprovalPolicy.objects.create(
+            organization=self.organization,
+            team=None,  # org-level policy also matches the enable, creating the conflict
+            action_key="feature_flag.enable",
+            conditions={},
+            approver_config={"quorum": 1, "users": [self.user.id]},
+            created_by=self.user,
+        )
+        flag = self._disabled_flag()
+
+        response = self.client.post(
+            f"/api/projects/{self.team.id}/scheduled_changes/",
+            {
+                "record_id": str(flag.id),
+                "model_name": "FeatureFlag",
+                "payload": {"operation": "update_status", "value": True},
+                "scheduled_at": (timezone.now() + timedelta(hours=1)).isoformat(),
+            },
+            format="json",
+        )
+
+        assert response.status_code == 400, response.content
+        assert response.json()["code"] == "policy_conflict"
+        assert ScheduledChange.objects.filter(record_id=str(flag.id)).count() == 0
 
     def test_scheduled_change_without_policy_applies_normally(self, _mock_enabled):
         flag = self._disabled_flag()

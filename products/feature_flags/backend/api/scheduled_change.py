@@ -9,6 +9,7 @@ from rest_framework.exceptions import PermissionDenied
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.api.shared import UserBasicSerializer
 
+from products.approvals.backend.mixins import ApprovalHandlingMixin
 from products.approvals.backend.models import ChangeRequest, ChangeRequestState
 from products.approvals.backend.scheduled_changes import gate_scheduled_change
 from products.feature_flags.backend.api.feature_flag import CanEditFeatureFlag
@@ -301,7 +302,7 @@ class ScheduledChangeSerializer(serializers.ModelSerializer):
 
 
 @extend_schema(extensions={"x-product": "feature_flags"})
-class ScheduledChangeViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
+class ScheduledChangeViewSet(ApprovalHandlingMixin, TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
     """
     Create, read, update and delete scheduled changes.
     """
