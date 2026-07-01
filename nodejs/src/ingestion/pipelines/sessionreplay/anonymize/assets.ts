@@ -1,4 +1,6 @@
 /** Media detection + placeholder/blur dispatch. */
+import { imageSize } from 'image-size'
+
 import {
     ImageSource,
     getScrubMethodForImage,
@@ -63,10 +65,17 @@ function imageDataUriBytes(dataUri: string): Buffer | null {
     return Buffer.from(dataUri.slice(comma + 1), 'base64')
 }
 
-/** Coerce an rrweb width/height attribute (number or numeric string) to a positive number, else undefined. */
-function toDim(v: unknown): number | undefined {
-    const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
-    return Number.isFinite(n) && n > 0 ? n : undefined
+/** Intrinsic pixel dimensions read straight from the image header (sync, header-only). Returns
+ *  undefined if the header can't be read, which routes the image to scrubbing (fail-closed) — an
+ *  undecodable or crafted image is never passed through unredacted. Deliberately NOT the rrweb
+ *  width/height attrs: those are the display size (spoofable, and a large image can be shown at 16px). */
+function imageDimensions(bytes: Buffer): { width: number; height: number } | undefined {
+    try {
+        const { width, height } = imageSize(bytes)
+        return typeof width === 'number' && typeof height === 'number' ? { width, height } : undefined
+    } catch {
+        return undefined
+    }
 }
 
 /**
@@ -93,10 +102,11 @@ function scrubInlineImage(
     if (bytes === null) {
         return false
     }
+    const dims = imageDimensions(bytes)
     const scrubMethod = getScrubMethodForImage({
         source,
-        width: toDim(attrs.width),
-        height: toDim(attrs.height),
+        width: dims?.width,
+        height: dims?.height,
         byteLength: bytes.length,
     })
     if (scrubMethod === 'passthrough') {

@@ -14,8 +14,9 @@ export type ImageSource = 'canvas' | 'img' | 'media'
 export type ScrubMethod = 'passthrough' | 'cheapBlur' | 'advancedScrub'
 
 export const TINY_MAX_SIDE = 16 // <= this on the long side => below the face/text detector floor
-// A genuine <=16px image is a few hundred bytes; require the bytes to be small too, so a crafted tiny
-// width/height (attacker/SDK-controlled rrweb attrs) can't force a large PII image through passthrough.
+// A genuine <=16px image is a few hundred bytes. The byte floor is a secondary guard: the caller reads
+// width/height from the image header (not spoofable rrweb attrs), so this only backstops a malformed
+// image whose header a parser might misread as tiny.
 export const TINY_MAX_BYTES = 4096
 export const TOPIC_MAX_BYTES = 900_000 // under Kafka's ~1MB message cap, leaving room for the envelope
 
@@ -29,9 +30,9 @@ export interface ImageMetadata {
 }
 
 export function getScrubMethodForImage(i: ImageMetadata): ScrubMethod {
-    // 1. Tiny + high-signal + below the detector floor -> keep as-is. Requires BOTH the declared
-    //    dimensions and the actual byte size to be tiny: dimensions come from untrusted rrweb attrs,
-    //    so the byte floor stops a crafted 1x1 from shielding a large image. Unknown-size => scrubbed.
+    // 1. Tiny + high-signal + below the detector floor -> keep as-is. Requires BOTH the intrinsic
+    //    header dimensions and the byte size to be tiny (the byte floor backstops a misread header on a
+    //    malformed image). Unknown dimensions (unreadable header) => scrubbed, never passed through.
     if (
         i.width != null &&
         i.height != null &&

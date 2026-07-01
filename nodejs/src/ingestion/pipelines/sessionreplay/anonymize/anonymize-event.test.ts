@@ -128,7 +128,7 @@ describe('anonymize/event router', () => {
     describe('image-scrub drain', () => {
         // A real 1x1 PNG, so it passes the magic-byte check and routes as an advanced image.
         const DATA_URI =
-            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAR0lEQVR4nO3YsQkAIAxEUeu//1A3ljvY2DywD0iSR+6svryjcL56mivjlAUyKzNIhMWwGBaHxbAYFodF12IO80QRE770HDddvGtfTNaUfqIAAAAASUVORK5CYII='
 
         // A FullSnapshot carrying one <img> with an inline rr_dataURL (advanced-route).
         function messageWithInlineImage(): { message: ParsedMessageData; img: Record<string, any> } {
