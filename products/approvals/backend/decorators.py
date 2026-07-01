@@ -15,7 +15,7 @@ from posthog.event_usage import report_user_action
 from posthog.models import Team
 
 from products.approvals.backend.actions.registry import get_action
-from products.approvals.backend.exceptions import ApprovalRequired
+from products.approvals.backend.exceptions import ApprovalRequired, PolicyConflict
 from products.approvals.backend.models import ChangeRequest, ChangeRequestState
 from products.approvals.backend.notifications import send_approval_requested_notification
 from products.approvals.backend.policies import PolicyDecision, PolicyEngine
@@ -356,13 +356,13 @@ def _result_to_exception(result: GateResult) -> None:
         raise APIException(result.error_message)
 
     if result.action == "policy_conflict":
-        raise ValidationError(
-            {
-                "code": "policy_conflict",
-                "error": result.error_message,
-                "conflicting_policies": result.conflicting_policies,
-                "guidance": "Split your changes into separate API calls to address each policy independently",
-            }
+        # A plain ValidationError would be flattened by the exceptions-hog handler into a generic
+        # `invalid_input` code, losing the conflict signal. Raise a dedicated exception the ViewSet
+        # renders into the same `policy_conflict` body as the viewset path (see _result_to_response).
+        raise PolicyConflict(
+            conflicting_policies=result.conflicting_policies,
+            message=result.error_message or "This change matches multiple approval policies",
+            guidance="Split your changes into separate API calls to address each policy independently",
         )
 
     if result.action == "duplicate":
