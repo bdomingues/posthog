@@ -24,8 +24,8 @@ import { ValueMatcher } from '~/types'
 import { createLibVersionMonitorStep } from './lib-version-monitor-step'
 import { createParseMessageStep } from './parse-message-step'
 import { createRecordSessionEventStep } from './record-session-event-step'
-import { createSessionBatchBeforeBatchStep } from './session-batch-before-batch-step'
 import { createResolveRetentionStep } from './session-batch-resolve-retention-step'
+import { createSessionBatchStep } from './session-batch-step'
 import { createWriteStep } from './session-batch-write-step'
 import { createTeamFilterStep } from './team-filter-step'
 
@@ -215,7 +215,7 @@ export function createSessionReplayAccumulatingPipeline(
         Record<string, never>,
         OverflowOutput
     >({
-        beforeBatch: (builder) => builder.pipe(createSessionBatchBeforeBatchStep(sessionBatchFactory)),
+        beforeBatch: (builder) => builder.pipe(createSessionBatchStep(sessionBatchFactory)),
         pipeline: recordPipeline,
         flush: (builder) =>
             builder.sequentially((b) =>
