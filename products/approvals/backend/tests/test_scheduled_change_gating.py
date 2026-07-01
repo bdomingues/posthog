@@ -265,10 +265,10 @@ class TestScheduledChangeGating(APIBaseTest):
         )
 
         assert response.status_code == 200, response.content
-        scheduled.refresh_from_db()
-        assert scheduled.change_request is not None
-        assert scheduled.change_request.created_by == editor
-        assert scheduled.change_request.created_by != self.user
+        reloaded = ScheduledChange.objects.get(id=scheduled.id)
+        assert reloaded.change_request is not None
+        assert reloaded.change_request.created_by == editor
+        assert reloaded.change_request.created_by != self.user
 
     def test_approved_then_stale_cr_is_not_applied(self, _mock_enabled):
         self._enable_policy()
