@@ -1,24 +1,20 @@
 /* eslint-disable no-console -- CLI logs to stdout */
 /**
- * Producer CLI for local end-to-end testing: take an image off disk, run the real routing + dedup +
- * topic-produce path (the logic that will live in the ml-mirror worker), and print the reference
- * that would replace the inline image in the block. The consumer (npm run consume) then scrubs it.
+ * Producer CLI for local end-to-end testing: post an image's raw bytes to the scrub topic under its
+ * team-scoped reference, so the consumer (npm run consume) scrubs it to S3.
  *
  *   npm run produce -- <image-path> <team-id>
  *
- * Demonstrates the full local flow: produce -> topic -> consumer -> S3. Run it twice to see dedup.
+ * This is a thin test harness. The real routing (tiny/canvas/oversize handled without producing) and
+ * Redis dedup live in the ml-mirror producer in nodejs, not here — this just posts one image so you
+ * can exercise the consumer.
  */
-import '../src/polyfill.ts'
-
-import Redis from 'ioredis'
 import { Kafka } from 'kafkajs'
 import { readFile } from 'node:fs/promises'
 
-import { KafkaTopicProducer, RedisDedupStore, ensureTopic } from '../src/clients.ts'
+import { ensureTopic } from '../src/clients.ts'
 import { loadConfig } from '../src/config.ts'
-import { emitImagesForScrub } from '../src/producer.ts'
-import { routeImage } from '../src/routing.ts'
-import { decodeSrc } from '../src/src-image.ts'
+import { hashImageBytes, imageRef } from '../src/content-ref.ts'
 
 async function main(): Promise<void> {
     const [file, teamStr] = process.argv.slice(2)
@@ -28,31 +24,18 @@ async function main(): Promise<void> {
     }
     const teamId = Number(teamStr)
     const bytes = await readFile(file)
-    const { W, H } = await decodeSrc(bytes)
-
-    const route = routeImage({ source: 'img', width: W, height: H, byteLength: bytes.length })
-    console.log(`route=${route} (${W}x${H}, ${bytes.length} bytes)`)
-    if (route !== 'advanced') {
-        console.log('not an advanced-path image; nothing posted (handled in-process by the worker)')
-        return
-    }
+    const ref = imageRef(teamId, hashImageBytes(bytes))
 
     const cfg = loadConfig()
-    const redis = new Redis(cfg.redisUrl)
-    const kafka = new Kafka({ clientId: 'replay-image-scrub-producer', brokers: cfg.kafkaBrokers })
+    const kafka = new Kafka({ clientId: 'ml-mirror-image-scrub-producer', brokers: cfg.kafkaBrokers })
     await ensureTopic(kafka, cfg.topic)
     const producer = kafka.producer()
     await producer.connect()
-
     try {
-        const [result] = await emitImagesForScrub([{ teamId, bytes }], {
-            dedup: new RedisDedupStore(redis),
-            producer: new KafkaTopicProducer(producer, cfg.topic),
-        })
-        console.log(result.posted ? `posted ${result.ref}` : `deduped ${result.ref} (already posted recently)`)
+        await producer.send({ topic: cfg.topic, acks: -1, messages: [{ key: ref, value: bytes }] })
+        console.log(`posted ${ref} (${bytes.length} bytes)`)
     } finally {
         await producer.disconnect()
-        redis.disconnect()
     }
 }
 
