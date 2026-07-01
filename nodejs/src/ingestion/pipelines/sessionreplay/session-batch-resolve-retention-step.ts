@@ -6,29 +6,45 @@ import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/ret
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 
 import { SessionBatchMetrics } from './sessions/metrics'
+import { SessionBatchManager } from './sessions/session-batch-manager'
 import { SessionReplayHeaders } from './validate-headers-step'
 
 /**
- * Record-phase batch step: resolve per-session retention for the whole batch in one call (batched
- * Redis MGET + deduped Postgres fallback) and attach it to each element, before the message is
- * parsed and recorded — so retention is resolved off the S3 write path, and a session bound for the
- * wrong retention is never parsed or written.
+ * Record-phase batch step: resolve per-session retention for the whole batch and attach it to each
+ * element, before the message is parsed and recorded — so retention is resolved off the S3 write
+ * path, and a session bound for the wrong retention is never parsed or written.
  *
- * Keys on the `session_id` header, which {@link createValidateSessionReplayHeadersStep} guarantees is
- * present. A session whose retention can't be resolved (deleted/unknown team, invalid value) is
- * dropped. A transient failure (e.g. Redis) is thrown by the service so the pipeline's retry wrapper
- * can re-run the step.
+ * A session already held in the current (unflushed) batch reuses the retention resolved for it
+ * earlier; only the rest are resolved via the service (batched Redis MGET + deduped Postgres
+ * fallback). Keys on the `session_id` header, which {@link createValidateSessionReplayHeadersStep}
+ * guarantees is present. A session whose retention can't be resolved (deleted/unknown team, invalid
+ * value) is dropped. A transient failure (e.g. Redis) is thrown by the service so the pipeline's
+ * retry wrapper can re-run the step.
  */
 export function createResolveRetentionStep<T extends { team: TeamForReplay; headers: SessionReplayHeaders }>(
-    retentionService: RetentionService
+    retentionService: RetentionService,
+    sessionBatchManager: SessionBatchManager
 ): BatchProcessingStep<T, T & { retentionPeriod: RetentionPeriod }> {
     return async function resolveRetentionStep(values) {
-        const resolutions = await retentionService.resolveSessionRetentions(
-            values.map((value) => ({ teamId: value.team.teamId, sessionId: value.headers.session_id }))
+        const batch = sessionBatchManager.getCurrentBatch()
+        // Reuse retention already resolved for sessions still in the current batch; resolve the rest.
+        const batchRetentions = values.map((value) => batch.getRetention(value.team.teamId, value.headers.session_id))
+        const toResolve = values.flatMap((value, index) =>
+            batchRetentions[index] === undefined
+                ? [{ teamId: value.team.teamId, sessionId: value.headers.session_id, index }]
+                : []
         )
+        const resolutions = await retentionService.resolveSessionRetentions(
+            toResolve.map(({ teamId, sessionId }) => ({ teamId, sessionId }))
+        )
+        const resolutionByIndex = new Map(toResolve.map(({ index }, i) => [index, resolutions[i]]))
 
         return values.map((value, index) => {
-            const resolution = resolutions[index]
+            const cached = batchRetentions[index]
+            if (cached !== undefined) {
+                return ok({ ...value, retentionPeriod: cached })
+            }
+            const resolution = resolutionByIndex.get(index)!
             if (resolution.resolved) {
                 return ok({ ...value, retentionPeriod: resolution.retentionPeriod })
             }

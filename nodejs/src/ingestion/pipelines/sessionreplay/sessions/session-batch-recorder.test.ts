@@ -329,6 +329,23 @@ describe('SessionBatchRecorder', () => {
         return mockWriteSession.mock.calls.map(([data]) => data.buffer.toString())
     }
 
+    describe('getRetention', () => {
+        it('returns the retention a recorded session was stored with', async () => {
+            await record(createMessage('session1', []), '1y')
+            expect(recorder.getRetention(1, 'session1')).toBe('1y')
+        })
+
+        it('returns undefined for a session the batch has not seen', () => {
+            expect(recorder.getRetention(1, 'unknown-session')).toBeUndefined()
+        })
+
+        it('scopes by team, so the same session id under another team is not found', async () => {
+            await record(createMessage('session1', [], {}, 1), '30d')
+            expect(recorder.getRetention(1, 'session1')).toBe('30d')
+            expect(recorder.getRetention(2, 'session1')).toBeUndefined()
+        })
+    })
+
     describe('recording and writing', () => {
         it('should write events in correct format', async () => {
             const message = createMessage('session1', [

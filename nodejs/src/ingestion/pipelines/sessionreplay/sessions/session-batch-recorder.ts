@@ -245,6 +245,22 @@ export class SessionBatchRecorder {
         return this.ackMessage(message, bytesWritten)
     }
 
+    /**
+     * Retention already resolved for a session held in this (unflushed) batch, or undefined if the
+     * batch hasn't seen it. Lets the resolve-retention step skip re-resolving a session a previous
+     * batch already placed here.
+     */
+    public getRetention(teamId: number, sessionId: string): RetentionPeriod | undefined {
+        const teamSessionKey = `${teamId}$${sessionId}`
+        for (const sessions of this.partitionSessions.values()) {
+            const entry = sessions.get(teamSessionKey)
+            if (entry) {
+                return entry.retentionPeriod
+            }
+        }
+        return undefined
+    }
+
     private ignoreMessage(message: MessageWithTeam): 0 {
         this.offsetManager.trackOffset({
             partition: message.message.metadata.partition,

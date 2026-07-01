@@ -108,7 +108,7 @@ export function createSessionReplayPipeline(
                 // recorded — keyed on the (validated) session_id header. Sessions with unresolvable
                 // retention are dropped before any parse or write.
                 .gather()
-                .pipeBatchWithRetry(createResolveRetentionStep(retentionService), {
+                .pipeBatchWithRetry(createResolveRetentionStep(retentionService, sessionBatchManager), {
                     tries: 3,
                     sleepMs: 100,
                 })

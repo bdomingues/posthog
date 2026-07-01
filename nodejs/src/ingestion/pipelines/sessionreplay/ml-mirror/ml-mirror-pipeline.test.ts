@@ -68,7 +68,10 @@ describe('ml-mirror-pipeline', () => {
         outputs = createMockIngestionOutputs()
 
         recordMock = jest.fn().mockResolvedValue(undefined)
-        const recorder = { record: recordMock } as unknown as jest.Mocked<SessionBatchRecorder>
+        const recorder = {
+            record: recordMock,
+            getRetention: jest.fn().mockReturnValue(undefined),
+        } as unknown as jest.Mocked<SessionBatchRecorder>
         mockSessionBatchManager = {
             getCurrentBatch: jest.fn().mockReturnValue(recorder),
             shouldFlush: jest.fn().mockReturnValue(false),
