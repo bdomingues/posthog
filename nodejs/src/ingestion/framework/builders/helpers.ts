@@ -87,23 +87,28 @@ export function newBatchingPipeline<
  * pre-built, since deployments choose it (e.g. the default vs ML-mirror session replay pipeline).
  */
 export function newAccumulatingPipeline<
-    TRecordIn extends object,
-    TRecordOut,
-    CRecordIn,
-    CRecordOut,
-    CBatch,
-    TFlushOut,
-    CFlushOut = Record<string, never>,
-    R extends string = never,
+    TRecordIn extends object, // element fed in per message (batch context is added internally)
+    TRecordOut, // element out of the per-message pipeline
+    CRecordIn, // per-message pipeline context in
+    CRecordOut, // per-message pipeline context out
+    CBatch, // batch context minted per cycle, tagged on every element and the flush unit
+    TFlushOut, // element out of the flush pipeline
+    CFlushOut = Record<string, never>, // flush-pipeline context out
+    R extends string = never, // redirect output names this pipeline can emit
 >(config: {
+    /** Builds the beforeBatch pipeline that mints a fresh batch context (e.g. the recorder) each cycle */
     beforeBatch: (
         builder: StartPipelineBuilder<BeforeAccumulationInput, Record<string, never>>
     ) => PipelineBuilder<BeforeAccumulationInput, BeforeAccumulationOutput<CBatch>, Record<string, never>>
+    /** Pre-built record pipeline that folds each message into the current batch context */
     pipeline: BatchPipeline<TRecordIn & CBatch & AccumulationContext, TRecordOut, CRecordIn, CRecordOut, R>
+    /** Builds the flush pipeline run on the size or age trigger, draining the batch context */
     flush: (
         builder: BatchPipelineBuilder<CBatch & AccumulationContext, CBatch & AccumulationContext, Record<string, never>>
     ) => BatchPipelineBuilder<CBatch & AccumulationContext, TFlushOut, Record<string, never>, CFlushOut, R>
+    /** Size predicate: returns true when the current batch should flush */
     shouldFlush: (batchContext: CBatch & AccumulationContext) => boolean
+    /** Maximum age of a batch in milliseconds before the timer flushes it */
     maxBatchAgeMs: number
 }): AccumulatingPipeline<TRecordIn, TRecordOut, CRecordIn, CRecordOut, CBatch, TFlushOut, CFlushOut, R> {
     const beforeBatch = config
