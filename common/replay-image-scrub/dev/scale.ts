@@ -20,7 +20,7 @@ const cores = availableParallelism()
 
 function runWorker(mode: string): Promise<{ imgs: number; ms: number }> {
     return new Promise((resolve, reject) => {
-        const p = spawn('npx', ['tsx', 'src/worker-proc.ts'], {
+        const p = spawn('npx', ['tsx', 'dev/worker-proc.ts'], {
             env: {
                 ...process.env,
                 MODE: mode,

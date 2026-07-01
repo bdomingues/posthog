@@ -14,7 +14,7 @@
  *
  *   npm run test   (exits non-zero on a gated text leak or an un-redacted face)
  */
-import './polyfill.ts'
+import '../src/polyfill.ts'
 
 import { existsSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
@@ -22,9 +22,9 @@ import { basename, join } from 'node:path'
 import sharp from 'sharp'
 import { type Worker, createWorker } from 'tesseract.js'
 
-import { advancedScrub, loadModels, type Models } from './scrub.ts'
-import { decodeSrc } from './src-image.ts'
-import { detectFacesYunet } from './yunet.ts'
+import { advancedScrub, loadModels, type Models } from '../src/scrub.ts'
+import { decodeSrc } from '../src/src-image.ts'
+import { detectFacesYunet } from '../src/yunet.ts'
 
 const ROOT = new URL('..', import.meta.url).pathname
 const OCR_CONF = 60

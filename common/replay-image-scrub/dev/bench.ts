@@ -8,7 +8,7 @@
  *
  * Usage: tsx src/bench.ts [--reps N]
  */
-import './polyfill.ts' // must precede anything that loads tfjs-node
+import '../src/polyfill.ts' // must precede anything that loads tfjs-node
 
 import { readFile, readdir } from 'node:fs/promises'
 import { availableParallelism } from 'node:os'
@@ -22,7 +22,7 @@ import {
     blurOnly,
     disposeModels,
     loadModels,
-} from './scrub.ts'
+} from '../src/scrub.ts'
 
 // One libvips thread per sharp op, so image-level concurrency parallelizes across cores instead of
 // each op grabbing every core and oversubscribing.

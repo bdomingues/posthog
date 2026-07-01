@@ -8,12 +8,12 @@
  * MODE=blur     -> baseline blurOnly (no models, no network)
  * MODE=advanced -> nsfw + face + dbnet scrub
  */
-import './polyfill.ts'
+import '../src/polyfill.ts'
 
 import { readFile, readdir } from 'node:fs/promises'
 import sharp from 'sharp'
 
-import { advancedScrub, blurOnly, loadModels } from './scrub.ts'
+import { advancedScrub, blurOnly, loadModels } from '../src/scrub.ts'
 
 sharp.concurrency(1)
 

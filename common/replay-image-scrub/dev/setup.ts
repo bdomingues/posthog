@@ -145,7 +145,7 @@ async function main(): Promise<void> {
         console.warn('no HF images fetched (network?); the suite will still run on the synthetic corpus')
     }
 
-    await import('../src/make-corpus.ts')
+    await import('./make-corpus.ts')
 }
 
 main().catch((e) => {

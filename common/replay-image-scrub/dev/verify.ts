@@ -13,14 +13,14 @@
  *
  * Usage: tsx src/verify.ts [img ...]
  */
-import './polyfill.ts'
+import '../src/polyfill.ts'
 
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import sharp from 'sharp'
 import { type Worker, createWorker } from 'tesseract.js'
 
-import { advancedScrub, loadModels } from './scrub.ts'
+import { advancedScrub, loadModels } from '../src/scrub.ts'
 
 const OCR_CONF = 60 // min tesseract word confidence to count as "readable"
 const OCR_UPSCALE = 2 // upscale before OCR for max sensitivity (CPU irrelevant for a test)

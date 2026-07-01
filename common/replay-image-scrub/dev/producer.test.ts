@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { hashImageBytes, imageRef, isImageRef, parseImageRef, s3KeyForRef } from './content-ref.ts'
+import { hashImageBytes, imageRef, isImageRef, parseImageRef, s3KeyForRef } from '../src/content-ref.ts'
 import {
     type DedupStore,
     type ImageInput,
     type TopicMessage,
     type TopicProducer,
     emitImagesForScrub,
-} from './producer.ts'
+} from '../src/producer.ts'
 
 /** In-memory dedup that counts round-trips, so we can assert one call per batch. Mirrors the ordered
  *  semantics of a Redis SET NX pipeline: within one batch the first occurrence of a key is fresh. */

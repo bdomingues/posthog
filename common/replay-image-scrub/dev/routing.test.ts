@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { type RouteInput, TINY_MAX_SIDE, TOPIC_MAX_BYTES, routeImage } from './routing.ts'
+import { type RouteInput, TINY_MAX_SIDE, TOPIC_MAX_BYTES, routeImage } from '../src/routing.ts'
 
 const base: RouteInput = { source: 'img', width: 800, height: 600, byteLength: 50_000 }
 

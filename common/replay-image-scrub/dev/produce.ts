@@ -8,17 +8,17 @@
  *
  * Demonstrates the full local flow: produce -> topic -> consumer -> S3. Run it twice to see dedup.
  */
-import './polyfill.ts'
+import '../src/polyfill.ts'
 
 import Redis from 'ioredis'
 import { Kafka } from 'kafkajs'
 import { readFile } from 'node:fs/promises'
 
-import { KafkaTopicProducer, RedisDedupStore, ensureTopic } from './clients.ts'
-import { loadConfig } from './config.ts'
-import { emitImagesForScrub } from './producer.ts'
-import { routeImage } from './routing.ts'
-import { decodeSrc } from './src-image.ts'
+import { KafkaTopicProducer, RedisDedupStore, ensureTopic } from '../src/clients.ts'
+import { loadConfig } from '../src/config.ts'
+import { emitImagesForScrub } from '../src/producer.ts'
+import { routeImage } from '../src/routing.ts'
+import { decodeSrc } from '../src/src-image.ts'
 
 async function main(): Promise<void> {
     const [file, teamStr] = process.argv.slice(2)
