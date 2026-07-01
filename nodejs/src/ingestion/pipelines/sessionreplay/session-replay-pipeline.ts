@@ -200,8 +200,8 @@ export function createSessionReplayPipeline(config: SessionReplayPipelineConfig)
 /**
  * Wraps the record pipeline in an accumulating pipeline: the record pipeline folds events into a
  * recorder minted per cycle by the factory; the flush pipeline resolves retention off the S3 write
- * path (retrying transient failures) and then writes the recorder to storage on a size or age
- * trigger. Offset commit stays with the consumer — it commits on each flushed result.
+ * path (retrying transient failures), writes the recorder to storage, commits the offsets it
+ * covers, then records the flush metrics — all on a size or age trigger.
  */
 export function createSessionReplayAccumulatingPipeline(
     config: SessionReplayAccumulatingPipelineConfig
