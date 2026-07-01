@@ -3,16 +3,15 @@ import { v7 as uuidv7 } from 'uuid'
 import { logger } from '~/common/utils/logger'
 import { captureException } from '~/common/utils/posthog'
 import { KafkaOffsetManager } from '~/ingestion/pipelines/sessionreplay/kafka/offset-manager'
+import { RetentionPeriod, RetentionPeriodToDaysMap } from '~/ingestion/pipelines/sessionreplay/shared/constants'
 import {
     SessionFeatureBlock,
     SessionFeatureStore,
 } from '~/ingestion/pipelines/sessionreplay/shared/features/session-feature-store'
 import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
 import { SessionMetadataSink } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-metadata-store'
-import { RetentionMap } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-map'
 import { KeyStore, RecordingEncryptor, SessionKey } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { MessageWithTeam } from '~/ingestion/pipelines/sessionreplay/teams/types'
-import { TeamId } from '~/types'
 
 import { SessionBatchFileStorage } from './session-batch-file-storage'
 import { SessionConsoleLogRecorder } from './session-console-log-recorder'
@@ -69,7 +68,10 @@ import { SnappySessionRecorder } from './snappy-session-recorder'
 export class SessionBatchRecorder {
     private readonly partitionSessions = new Map<
         number,
-        Map<string, [SnappySessionRecorder, SessionConsoleLogRecorder, SessionFeatureRecorder, SessionKey]>
+        Map<
+            string,
+            [SnappySessionRecorder, SessionConsoleLogRecorder, SessionFeatureRecorder, SessionKey, RetentionPeriod]
+        >
     >()
     private readonly partitionSizes = new Map<number, number>()
     private _size: number = 0
@@ -98,9 +100,11 @@ export class SessionBatchRecorder {
      * Appends events into the appropriate session
      *
      * @param message - The message to record, including team context
+     * @param retentionPeriod - The session's retention, resolved upstream; sets the key expiry and
+     *   routes the flush to the matching per-retention storage.
      * @returns Number of raw bytes written (without compression)
      */
-    public async record(message: MessageWithTeam): Promise<number> {
+    public async record(message: MessageWithTeam, retentionPeriod: RetentionPeriod): Promise<number> {
         const { partition } = message.message.metadata
         const sessionId = message.message.session_id
         const teamId = message.team.teamId
@@ -124,7 +128,7 @@ export class SessionBatchRecorder {
         }
 
         const sessionKey = isNewSession
-            ? await this.keyStore.generateKey(sessionId, teamId)
+            ? await this.keyStore.generateKey(sessionId, teamId, RetentionPeriodToDaysMap[retentionPeriod])
             : await this.keyStore.getKey(sessionId, teamId)
 
         if (sessionKey.sessionState === 'deleted') {
@@ -200,6 +204,7 @@ export class SessionBatchRecorder {
                 new SessionConsoleLogRecorder(sessionId, teamId, this.batchId, this.consoleLogStore),
                 new SessionFeatureRecorder(sessionId, teamId, this.batchId, this.featuresRolloutPercentage),
                 sessionKey,
+                retentionPeriod,
             ])
         }
 
@@ -275,28 +280,14 @@ export class SessionBatchRecorder {
     }
 
     /**
-     * Returns the team/session of every buffered session, so retention can be resolved off the
-     * storage write path (in the resolve-retention flush step) before flushToStorage runs.
-     */
-    public getPendingSessions(): { teamId: TeamId; sessionId: string }[] {
-        const pending: { teamId: TeamId; sessionId: string }[] = []
-        for (const sessions of this.partitionSessions.values()) {
-            for (const [sessionBlockRecorder] of sessions.values()) {
-                pending.push({ teamId: sessionBlockRecorder.teamId, sessionId: sessionBlockRecorder.sessionId })
-            }
-        }
-        return pending
-    }
-
-    /**
      * Writes the session recordings to storage and stores metadata. Offsets are committed and flush
      * metrics recorded by later flush-pipeline steps, not here — the recorder owns the storage write,
-     * not the Kafka offset lifecycle.
+     * not the Kafka offset lifecycle. Each session's retention was resolved and stored at record
+     * time, so it routes straight to the matching per-retention storage.
      *
-     * @param retentionMap - Resolved retention per session, keyed by team + session, from upstream.
      * @throws If the flush operation fails
      */
-    public async flushToStorage(retentionMap: RetentionMap): Promise<SessionBlockMetadata[]> {
+    public async flushToStorage(): Promise<SessionBlockMetadata[]> {
         logger.info('🔁', 'session_batch_recorder_flushing', {
             partitions: this.partitionSessions.size,
             totalSize: this._size,
@@ -324,17 +315,8 @@ export class SessionBatchRecorder {
                     consoleLogRecorder,
                     featureRecorder,
                     sessionKey,
+                    retentionPeriod,
                 ] of sessions.values()) {
-                    // Skip sessions the resolve-retention step dropped (e.g. deleted team) — their
-                    // offsets still commit, so the poison session doesn't wedge the batch.
-                    const retentionPeriod = retentionMap.get(
-                        sessionBlockRecorder.teamId,
-                        sessionBlockRecorder.sessionId
-                    )
-                    if (retentionPeriod === undefined) {
-                        continue
-                    }
-
                     const {
                         buffer,
                         eventCount,

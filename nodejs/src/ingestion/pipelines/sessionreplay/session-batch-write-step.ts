@@ -3,21 +3,17 @@ import { ProcessingStep } from '~/ingestion/framework/steps'
 import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
 
 import { SessionBatchContext } from './session-batch-context'
-import { RetentionMap } from './shared/retention/retention-map'
 
 /**
- * Flush step: write the accumulated batch to storage. Retention is already resolved (by the
- * resolve-retention step) and passed in the batch context; a later flush step commits offsets on
- * the written result, so nothing here touches Kafka offsets.
+ * Flush step: write the accumulated batch to storage. Each session's retention was resolved and
+ * stored on the recorder at record time, so nothing here touches Redis; a later flush step commits
+ * offsets on the written result, so nothing here touches Kafka offsets either.
  *
  * Terminal transform (produces block metadata, not an extended context), but its input is generic
- * so it only requires the fields it reads — the recorder and the resolved retention map.
+ * so it only requires the field it reads — the recorder.
  */
-export function createWriteStep<T extends SessionBatchContext & { retentionMap: RetentionMap }>(): ProcessingStep<
-    T,
-    SessionBlockMetadata[]
-> {
+export function createWriteStep<T extends SessionBatchContext>(): ProcessingStep<T, SessionBlockMetadata[]> {
     return async function writeStep(batchContext) {
-        return ok(await batchContext.sessionBatchRecorder.flushToStorage(batchContext.retentionMap))
+        return ok(await batchContext.sessionBatchRecorder.flushToStorage())
     }
 }

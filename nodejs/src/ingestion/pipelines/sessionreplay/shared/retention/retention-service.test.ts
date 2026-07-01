@@ -58,75 +58,6 @@ describe('RetentionService', () => {
         jest.useRealTimers()
     })
 
-    describe('getRetentionByTeamId', () => {
-        it('should return retention period for valid team id 1', async () => {
-            const retentionPeriod = await retentionService.getRetentionByTeamId(1)
-            expect(retentionPeriod).toEqual('30d')
-        })
-
-        it('should return retention period for valid team id 2', async () => {
-            const retentionPeriod = await retentionService.getRetentionByTeamId(2)
-            expect(retentionPeriod).toEqual('1y')
-        })
-
-        it('should return null for unknown team id', async () => {
-            const retentionPeriod = await retentionService.getRetentionByTeamId(3)
-            expect(retentionPeriod).toBeNull()
-        })
-    })
-
-    describe('getSessionRetention', () => {
-        it('resolves retention for valid team id 1', async () => {
-            const resolution = await retentionService.getSessionRetention(1, '123')
-            expect(resolution).toEqual({ resolved: true, retentionPeriod: '30d' })
-        })
-
-        it('resolves retention for valid team id 2', async () => {
-            const resolution = await retentionService.getSessionRetention(2, '321')
-            expect(resolution).toEqual({ resolved: true, retentionPeriod: '1y' })
-        })
-
-        it('is unresolved (not thrown) for unknown team id', async () => {
-            const resolution = await retentionService.getSessionRetention(3, '456')
-            expect(resolution).toEqual({ resolved: false })
-        })
-
-        it('is unresolved (not thrown) for an invalid retention period', async () => {
-            const resolution = await retentionService.getSessionRetention(4, '654')
-            expect(resolution).toEqual({ resolved: false })
-        })
-
-        it('does not cache an unresolvable lookup back to Redis', async () => {
-            await retentionService.getSessionRetention(3, '456')
-            expect(mockRedisClient.set).not.toHaveBeenCalled()
-        })
-
-        it('should load retention from Redis if key exists', async () => {
-            mockRedisClient.get = jest.fn().mockReturnValue('30d')
-
-            const resolution = await retentionService.getSessionRetention(1, '123')
-            expect(resolution).toEqual({ resolved: true, retentionPeriod: '30d' })
-
-            expect(mockRedisClient.get).toHaveBeenCalledTimes(1)
-            expect(mockRedisClient.get).toHaveBeenCalledWith('@posthog/replay/session-retention-123')
-        })
-
-        it('should store retention in Redis if key does not exist', async () => {
-            mockRedisClient.get = jest.fn().mockReturnValue(null)
-
-            const resolution = await retentionService.getSessionRetention(1, '123')
-            expect(resolution).toEqual({ resolved: true, retentionPeriod: '30d' })
-
-            expect(mockRedisClient.set).toHaveBeenCalledTimes(1)
-            expect(mockRedisClient.set).toHaveBeenCalledWith(
-                '@posthog/replay/session-retention-123',
-                '30d',
-                'EX',
-                24 * 60 * 60
-            )
-        })
-    })
-
     describe('resolveSessionRetentions', () => {
         it('returns [] without touching Redis for an empty batch', async () => {
             const results = await retentionService.resolveSessionRetentions([])
@@ -230,18 +161,6 @@ describe('RetentionService', () => {
                 { resolved: true, retentionPeriod: '1y' },
                 { resolved: true, retentionPeriod: '30d' },
             ])
-        })
-    })
-
-    describe('metrics', () => {
-        it('should increment lookup errors once for unknown team id', async () => {
-            await retentionService.getSessionRetention(3, '456')
-            expect(RetentionServiceMetrics.incrementLookupErrors).toHaveBeenCalledTimes(1)
-        })
-
-        it('should increment lookup errors once for invalid retention period', async () => {
-            await retentionService.getSessionRetention(4, '654')
-            expect(RetentionServiceMetrics.incrementLookupErrors).toHaveBeenCalledTimes(1)
         })
     })
 })

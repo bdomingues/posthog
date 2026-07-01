@@ -18,17 +18,8 @@ import { SessionFeatureStore } from '~/ingestion/pipelines/sessionreplay/shared/
 import { MemoryKeyStore } from '~/ingestion/pipelines/sessionreplay/shared/keystore'
 import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
 import { SessionMetadataStore } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-metadata-store'
-import { RetentionMap } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-map'
 import { SessionKeyDeletedError } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { MessageWithTeam } from '~/ingestion/pipelines/sessionreplay/teams/types'
-
-function flushRecorder(recorder: SessionBatchRecorder) {
-    const retentionMap = new RetentionMap()
-    for (const { teamId, sessionId } of recorder.getPendingSessions()) {
-        retentionMap.set(teamId, sessionId, '30d')
-    }
-    return recorder.flushToStorage(retentionMap)
-}
 
 jest.mock('~/ingestion/pipelines/sessionreplay/sessions/session-feature-recorder', () => ({
     SessionFeatureRecorder: jest.fn().mockImplementation(() => ({
@@ -240,8 +231,8 @@ describe('session recording encryption integration', () => {
         ]
 
         const message = createMessage(sessionId, teamId, originalEvents)
-        await recorder.record(message)
-        const metadata = await flushRecorder(recorder)
+        await recorder.record(message, '30d')
+        const metadata = await recorder.flushToStorage()
 
         expect(metadata).toHaveLength(1)
         const blockMetadata = metadata[0]
@@ -278,8 +269,8 @@ describe('session recording encryption integration', () => {
         const message1 = createMessage(sessionId, teamId, [
             { type: EventType.FullSnapshot, data: { source: 1, snapshot: { html: '<div>Block 1</div>' } } },
         ])
-        await recorder.record(message1)
-        const metadata1 = await flushRecorder(recorder)
+        await recorder.record(message1, '30d')
+        const metadata1 = await recorder.flushToStorage()
 
         const encryptedBlock1 = readEncryptedBlockFromBatch(metadata1[0])
         const nonce1 = encryptedBlock1.subarray(0, sodium.crypto_secretbox_NONCEBYTES)
@@ -303,8 +294,8 @@ describe('session recording encryption integration', () => {
         const message2 = createMessage(sessionId, teamId, [
             { type: EventType.IncrementalSnapshot, data: { source: 2, mutations: [{ id: 2 }] } },
         ])
-        await recorder.record(message2)
-        const metadata2 = await flushRecorder(recorder)
+        await recorder.record(message2, '30d')
+        const metadata2 = await recorder.flushToStorage()
 
         const encryptedBlock2 = readEncryptedBlockFromBatch(metadata2[0])
         const nonce2 = encryptedBlock2.subarray(0, sodium.crypto_secretbox_NONCEBYTES)
@@ -328,8 +319,8 @@ describe('session recording encryption integration', () => {
         const message = createMessage(sessionId, teamId, [
             { type: EventType.FullSnapshot, data: { source: 1, snapshot: { html: '<div>Secret</div>' } } },
         ])
-        await recorder.record(message)
-        const metadata = await flushRecorder(recorder)
+        await recorder.record(message, '30d')
+        const metadata = await recorder.flushToStorage()
 
         const encryptedBlock = readEncryptedBlockFromBatch(metadata[0])
 
@@ -353,10 +344,10 @@ describe('session recording encryption integration', () => {
             const message = createMessage(sessionId, teamId, [
                 { type: EventType.FullSnapshot, data: { source: 1, snapshot: { html: `<div>${sessionId}</div>` } } },
             ])
-            await recorder.record(message)
+            await recorder.record(message, '30d')
         }
 
-        const metadata = await flushRecorder(recorder)
+        const metadata = await recorder.flushToStorage()
         expect(metadata).toHaveLength(3)
 
         for (const block of metadata) {

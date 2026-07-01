@@ -206,7 +206,7 @@ export class SessionRecordingIngester {
         this.keyStore =
             collaborators.keyStore ??
             new MemoryCachedKeyStore(
-                getKeyStore(this.retentionService, region, {
+                getKeyStore(region, {
                     kmsEndpoint: config.SESSION_RECORDING_KMS_ENDPOINT,
                     dynamoDBEndpoint: config.SESSION_RECORDING_DYNAMODB_ENDPOINT,
                 })
@@ -305,6 +305,7 @@ export class SessionRecordingIngester {
             overflowEnabled: this.overflowEnabled(),
             promiseScheduler: this.promiseScheduler,
             teamService: this.teamService,
+            retentionService: this.retentionService,
             topHog: this.topHog,
             isDebugLoggingEnabled: this.isDebugLoggingEnabled,
         })
@@ -312,7 +313,6 @@ export class SessionRecordingIngester {
         this.pipeline = createSessionReplayPipeline({
             recordPipeline,
             sessionBatchFactory: this.sessionBatchFactory,
-            retentionService: this.retentionService,
             offsetManager: this.offsetManager,
             maxBatchSizeBytes: this.maxBatchSizeBytes,
             maxBatchAgeMs: this.maxBatchAgeMs,

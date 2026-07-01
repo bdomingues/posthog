@@ -40,18 +40,9 @@ import { SessionTracker } from '~/ingestion/pipelines/sessionreplay/sessions/ses
 import { SessionFeatureStore } from '~/ingestion/pipelines/sessionreplay/shared/features/session-feature-store'
 import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
 import { SessionMetadataStore } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-metadata-store'
-import { RetentionMap } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-map'
 import { createMockEncryptor, createMockKeyStore } from '~/ingestion/pipelines/sessionreplay/shared/test-helpers'
 import { KeyStore, RecordingEncryptor } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { MessageWithTeam } from '~/ingestion/pipelines/sessionreplay/teams/types'
-
-function flushRecorder(recorder: SessionBatchRecorder) {
-    const retentionMap = new RetentionMap()
-    for (const { teamId, sessionId } of recorder.getPendingSessions()) {
-        retentionMap.set(teamId, sessionId, '30d')
-    }
-    return recorder.flushToStorage(retentionMap)
-}
 
 jest.mock('~/ingestion/pipelines/sessionreplay/sessions/session-feature-recorder', () => ({
     SessionFeatureRecorder: jest.fn().mockImplementation(() => ({
@@ -269,11 +260,11 @@ describe('session recording integration', () => {
 
         // Record all messages
         for (const message of messages) {
-            await recorder.record(message)
+            await recorder.record(message, '30d')
         }
 
         // Flush and get metadata
-        const metadata = await flushRecorder(recorder)
+        const metadata = await recorder.flushToStorage()
 
         // Verify we got all sessions
         expect(metadata).toHaveLength(3)

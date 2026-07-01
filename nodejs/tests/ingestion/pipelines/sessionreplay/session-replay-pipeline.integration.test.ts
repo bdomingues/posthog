@@ -1,12 +1,12 @@
 /**
  * Integration test for the session replay pipeline.
  *
- * Drives createSessionReplayPipeline end-to-end with every external dependency
- * (Kafka, Redis, S3) mocked: real record pipeline, real flush pipeline (resolve retention → write
- * → commit offsets → record metrics), real retention service over a mock Redis client, and a mock
- * recorder standing in for the S3/metadata writes. It locks in the flush ordering the split-out
- * steps exist to guarantee — most importantly that flush metrics are recorded only after the batch
- * is written and its offsets committed.
+ * Drives createSessionReplayPipeline end-to-end with every external dependency (Kafka, Redis, S3)
+ * mocked: the real inner pipeline (which resolves retention in a batch step before recording, over a
+ * mock Redis client), the real flush pipeline (write → commit offsets → record metrics), and a mock
+ * recorder standing in for the S3/metadata writes. It locks in two guarantees: retention is resolved
+ * before recording (unresolvable sessions are dropped there), and flush metrics are recorded only
+ * after the batch is written and its offsets committed.
  */
 import { Message } from 'node-rdkafka'
 
@@ -27,7 +27,6 @@ import { SessionBatchMetrics } from '~/ingestion/pipelines/sessionreplay/session
 import { SessionBatchFactory } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-factory'
 import { SessionBatchRecorder } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
 import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
-import { RetentionMap } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-map'
 import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
@@ -97,12 +96,10 @@ describe('session replay pipeline integration', () => {
     let mockTeamServiceForRetention: jest.Mocked<TeamService>
     let recordFlushedBatchSpy: jest.SpyInstance
     let events: string[]
-    let flushToStorageArg: RetentionMap | undefined
 
     beforeEach(() => {
         jest.clearAllMocks()
         events = []
-        flushToStorageArg = undefined
 
         mockCreateParseHeadersStep.mockReturnValue((input: { message: Message; headers?: Record<string, string> }) => {
             const headers: Record<string, string> = {}
@@ -120,13 +117,7 @@ describe('session replay pipeline integration', () => {
         mockRecorder = {
             record: jest.fn().mockResolvedValue(100),
             size: 100,
-            getPendingSessions: jest.fn().mockReturnValue([{ teamId: 1, sessionId: 'session-1' }]),
-            flushToStorage: jest.fn().mockImplementation((retentionMap: RetentionMap) => {
-                flushToStorageArg = retentionMap
-                // Write only the sessions that survived retention resolution.
-                const written = retentionMap.get(1, 'session-1') ? [blockMetadata('session-1')] : []
-                return Promise.resolve(written)
-            }),
+            flushToStorage: jest.fn().mockResolvedValue([blockMetadata('session-1')]),
             discardPartition: jest.fn(),
         } as unknown as jest.Mocked<SessionBatchRecorder>
 
@@ -136,7 +127,6 @@ describe('session replay pipeline integration', () => {
             ({
                 record: jest.fn().mockResolvedValue(0),
                 size: 0,
-                getPendingSessions: jest.fn().mockReturnValue([]),
                 flushToStorage: jest.fn().mockResolvedValue([]),
                 discardPartition: jest.fn(),
             }) as unknown as SessionBatchRecorder
@@ -171,7 +161,7 @@ describe('session replay pipeline integration', () => {
         recordFlushedBatchSpy = jest
             .spyOn(SessionBatchMetrics, 'recordFlushedBatch')
             .mockImplementation(() => events.push('metrics'))
-        jest.spyOn(SessionBatchMetrics, 'incrementSessionsDroppedDuringFlush').mockImplementation(() => {})
+        jest.spyOn(SessionBatchMetrics, 'incrementSessionsDroppedMissingRetention').mockImplementation(() => {})
 
         const recordPipeline = createSessionReplayInnerPipeline({
             outputs: createMockIngestionOutputs<
@@ -184,6 +174,7 @@ describe('session replay pipeline integration', () => {
                 getTeamByToken: jest.fn().mockResolvedValue(defaultTeam),
                 getRetentionPeriodByTeamId: jest.fn().mockResolvedValue('30d'),
             } as unknown as TeamService,
+            retentionService,
             topHog: createMockTopHog(),
             isDebugLoggingEnabled: () => false,
         })
@@ -191,7 +182,6 @@ describe('session replay pipeline integration', () => {
         pipeline = createSessionReplayPipeline({
             recordPipeline,
             sessionBatchFactory: fakeFactory,
-            retentionService,
             offsetManager: mockOffsetManager,
             maxBatchSizeBytes: 1,
             maxBatchAgeMs: 60_000,
@@ -213,13 +203,14 @@ describe('session replay pipeline integration', () => {
         return flushed
     }
 
-    it('records, then on flush writes, commits offsets, and records metrics in that order', async () => {
+    it('resolves retention and records, then on flush writes, commits offsets, and records metrics in that order', async () => {
         await feed([createSnapshotMessage('session-1', 1)])
 
-        // Drain just the record phase: the message is recorded, but nothing has flushed yet.
+        // Drain just the record phase: retention resolves, the message is recorded, nothing flushed yet.
         const recordResult = await pipeline.next()
         expect(recordResult?.flushed).toBe(false)
         expect(mockRecorder.record).toHaveBeenCalledTimes(1)
+        expect(mockRecorder.record).toHaveBeenCalledWith(expect.anything(), '30d')
         expect(mockOffsetManager.commit).not.toHaveBeenCalled()
         expect(recordFlushedBatchSpy).not.toHaveBeenCalled()
 
@@ -243,23 +234,19 @@ describe('session replay pipeline integration', () => {
         expect(recordFlushedBatchSpy).not.toHaveBeenCalled()
     })
 
-    it('drops a session with unresolvable retention but still commits offsets', async () => {
-        // Cache miss and the team has no retention → the session is unresolvable and dropped.
+    it('drops a session with unresolvable retention before it is recorded', async () => {
+        // Cache miss and the team has no retention → the session is unresolvable.
         mockRedisClient.mget.mockResolvedValue([null])
         mockTeamServiceForRetention.getRetentionPeriodByTeamId.mockResolvedValue(null)
 
         await feed([createSnapshotMessage('session-1', 1)])
-        const flushed = await drainToFlush()
+        await pipeline.next() // record phase
 
-        expect(flushed).toBe(true)
-        // The dropped session is left out of the retention map handed to the writer.
-        expect(flushToStorageArg?.get(1, 'session-1')).toBeUndefined()
-        // Offsets still commit, so the poison session doesn't wedge the batch.
-        expect(mockOffsetManager.commit).toHaveBeenCalledTimes(1)
-        expect(SessionBatchMetrics.incrementSessionsDroppedDuringFlush).toHaveBeenCalledTimes(1)
+        expect(mockRecorder.record).not.toHaveBeenCalled()
+        expect(SessionBatchMetrics.incrementSessionsDroppedMissingRetention).toHaveBeenCalledTimes(1)
     })
 
-    it('retries a transient retention failure and then flushes', async () => {
+    it('retries a transient retention failure and then records', async () => {
         jest.useFakeTimers()
         try {
             // First retention lookup fails transiently (Redis), the retry succeeds.
@@ -267,15 +254,13 @@ describe('session replay pipeline integration', () => {
 
             await feed([createSnapshotMessage('session-1', 1)])
 
-            const drainPromise = drainToFlush()
+            const recordPromise = pipeline.next()
             // Let the retry's backoff sleep elapse.
             await jest.advanceTimersByTimeAsync(200)
-            const flushed = await drainPromise
+            await recordPromise
 
-            expect(flushed).toBe(true)
             expect(mockRedisClient.mget).toHaveBeenCalledTimes(2)
-            expect(mockRecorder.flushToStorage).toHaveBeenCalledTimes(1)
-            expect(mockOffsetManager.commit).toHaveBeenCalledTimes(1)
+            expect(mockRecorder.record).toHaveBeenCalledTimes(1)
         } finally {
             jest.useRealTimers()
         }

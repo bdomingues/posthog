@@ -11,6 +11,7 @@ import { createOkContext } from '~/ingestion/framework/helpers'
 import { ok } from '~/ingestion/framework/results'
 import { defaultAllowLists } from '~/ingestion/pipelines/sessionreplay/anonymize/default-dict'
 import { SessionBatchRecorder } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
+import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { createMockIngestionOutputs } from '~/tests/helpers/mock-ingestion-outputs'
@@ -45,6 +46,15 @@ describe('ml-mirror-pipeline', () => {
     >
     const scrubContext = { allow: defaultAllowLists() }
     const now = DateTime.now()
+
+    // Resolves every session to 30d so messages flow through to recording.
+    const retentionService = {
+        resolveSessionRetentions: jest
+            .fn()
+            .mockImplementation((sessions: { teamId: number; sessionId: string }[]) =>
+                Promise.resolve(sessions.map(() => ({ resolved: true, retentionPeriod: '30d' })))
+            ),
+    } as unknown as RetentionService
 
     const team = (aiTrainingOptedIn: boolean): TeamForReplay => ({
         teamId: 1,
@@ -81,6 +91,7 @@ describe('ml-mirror-pipeline', () => {
             overflowEnabled: false,
             promiseScheduler,
             teamService: mockTeamService,
+            retentionService,
             topHog,
             isDebugLoggingEnabled: () => false,
             scrubContext,

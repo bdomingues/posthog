@@ -8,7 +8,6 @@ import {
 import { DecryptCommand, GenerateDataKeyCommand, KMSClient } from '@aws-sdk/client-kms'
 import sodium from 'libsodium-wrappers'
 
-import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 import { DeleteKeyResult, KeyStore, SessionKey } from '~/ingestion/pipelines/sessionreplay/shared/types'
 
 const KEYS_TABLE_NAME = 'session-recording-keys'
@@ -21,23 +20,16 @@ const TOMBSTONE_TTL_SECONDS = 30 * 24 * 60 * 60 // 30 days
 export class DynamoDBKeyStore implements KeyStore {
     constructor(
         private dynamoDBClient: DynamoDBClient,
-        private kmsClient: KMSClient,
-        private retentionService: RetentionService
+        private kmsClient: KMSClient
     ) {}
 
     async start(): Promise<void> {
         await sodium.ready
     }
 
-    async generateKey(sessionId: string, teamId: number): Promise<SessionKey> {
-        const retention = await this.retentionService.getSessionRetentionDays(teamId, sessionId)
-        if (!retention.resolved) {
-            // Without a retention period we can't set the key's expiry; the team's upstream retention
-            // check should mean this is only hit for a team deleted mid-flight.
-            throw new Error(`Cannot generate session key: unresolved retention for session ${sessionId} team ${teamId}`)
-        }
+    async generateKey(sessionId: string, teamId: number, retentionDays: number): Promise<SessionKey> {
         const createdAt = Math.floor(Date.now() / 1000)
-        const expiresAt = createdAt + retention.retentionPeriodDays * 24 * 60 * 60
+        const expiresAt = createdAt + retentionDays * 24 * 60 * 60
 
         const { Plaintext, CiphertextBlob } = await this.kmsClient.send(
             new GenerateDataKeyCommand({

@@ -1,15 +1,12 @@
 import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb'
 import { KMSClient } from '@aws-sdk/client-kms'
 
-import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
-
 import { DynamoDBKeyStore } from './dynamodb-keystore'
 
 describe('DynamoDBKeyStore', () => {
     let keyStore: DynamoDBKeyStore
     let mockDynamoDBClient: jest.Mocked<DynamoDBClient>
     let mockKMSClient: jest.Mocked<KMSClient>
-    let mockRetentionService: jest.Mocked<RetentionService>
 
     const mockPlaintextKey = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
     const mockEncryptedKey = new Uint8Array([101, 102, 103, 104, 105])
@@ -18,11 +15,8 @@ describe('DynamoDBKeyStore', () => {
         it('should create a DynamoDBKeyStore instance and initialize sodium on start', async () => {
             const dynamoDBClient = { send: jest.fn() } as unknown as jest.Mocked<DynamoDBClient>
             const kmsClient = { send: jest.fn() } as unknown as jest.Mocked<KMSClient>
-            const retentionService = {
-                getSessionRetentionDays: jest.fn(),
-            } as unknown as jest.Mocked<RetentionService>
 
-            const store = new DynamoDBKeyStore(dynamoDBClient, kmsClient, retentionService)
+            const store = new DynamoDBKeyStore(dynamoDBClient, kmsClient)
             await store.start()
 
             expect(store).toBeInstanceOf(DynamoDBKeyStore)
@@ -44,11 +38,7 @@ describe('DynamoDBKeyStore', () => {
             }),
         } as unknown as jest.Mocked<KMSClient>
 
-        mockRetentionService = {
-            getSessionRetentionDays: jest.fn().mockResolvedValue({ resolved: true, retentionPeriodDays: 30 }),
-        } as unknown as jest.Mocked<RetentionService>
-
-        keyStore = new DynamoDBKeyStore(mockDynamoDBClient, mockKMSClient, mockRetentionService)
+        keyStore = new DynamoDBKeyStore(mockDynamoDBClient, mockKMSClient)
         await keyStore.start()
     })
 
@@ -58,7 +48,7 @@ describe('DynamoDBKeyStore', () => {
 
     describe('generateKey', () => {
         it('should generate a new key and store it in DynamoDB with condition expression', async () => {
-            const result = await keyStore.generateKey('session-123', 1)
+            const result = await keyStore.generateKey('session-123', 1, 30)
 
             expect(mockKMSClient.send).toHaveBeenCalledTimes(1)
             expect(mockDynamoDBClient.send).toHaveBeenCalledTimes(1)
@@ -98,17 +88,15 @@ describe('DynamoDBKeyStore', () => {
                 .mockResolvedValueOnce({ Plaintext: mockPlaintextKey, CiphertextBlob: mockEncryptedKey })
                 .mockResolvedValueOnce({ Plaintext: existingPlaintextKey })
 
-            const result = await keyStore.generateKey('session-123', 1)
+            const result = await keyStore.generateKey('session-123', 1, 30)
 
             expect(result.plaintextKey).toEqual(Buffer.from(existingPlaintextKey))
             expect(result.encryptedKey).toEqual(Buffer.from(existingEncryptedKey))
             expect(result.sessionState).toBe('ciphertext')
         })
 
-        it('should calculate expiration based on retention days', async () => {
-            mockRetentionService.getSessionRetentionDays.mockResolvedValue({ resolved: true, retentionPeriodDays: 90 })
-
-            await keyStore.generateKey('session-123', 1)
+        it('should calculate expiration based on the retention days it is given', async () => {
+            await keyStore.generateKey('session-123', 1, 90)
 
             const dynamoCall = mockDynamoDBClient.send.mock.calls[0][0] as any
             const createdAt = Math.floor(new Date('2024-01-15T12:00:00Z').getTime() / 1000)
@@ -124,26 +112,15 @@ describe('DynamoDBKeyStore', () => {
                 CiphertextBlob: undefined,
             })
 
-            await expect(keyStore.generateKey('session-123', 1)).rejects.toThrow('Failed to generate data key from KMS')
-        })
-
-        it('should query retention service for session retention days', async () => {
-            await keyStore.generateKey('session-456', 2)
-
-            expect(mockRetentionService.getSessionRetentionDays).toHaveBeenCalledWith(2, 'session-456')
+            await expect(keyStore.generateKey('session-123', 1, 30)).rejects.toThrow(
+                'Failed to generate data key from KMS'
+            )
         })
 
         it('should throw error if DynamoDB fails to store key', async () => {
             ;(mockDynamoDBClient.send as jest.Mock).mockRejectedValue(new Error('DynamoDB error'))
 
-            await expect(keyStore.generateKey('session-123', 1)).rejects.toThrow('DynamoDB error')
-        })
-
-        it('throws without writing a key when retention is unresolved', async () => {
-            mockRetentionService.getSessionRetentionDays.mockResolvedValue({ resolved: false })
-
-            await expect(keyStore.generateKey('session-123', 1)).rejects.toThrow('unresolved retention')
-            expect(mockDynamoDBClient.send).not.toHaveBeenCalled()
+            await expect(keyStore.generateKey('session-123', 1, 30)).rejects.toThrow('DynamoDB error')
         })
     })
 

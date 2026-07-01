@@ -1,42 +1,40 @@
 import { logger } from '~/common/utils/logger'
-import { ok } from '~/ingestion/framework/results'
-import { ProcessingStep } from '~/ingestion/framework/steps'
-import { RetentionMap } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-map'
+import { BatchProcessingStep } from '~/ingestion/framework/base-batch-pipeline'
+import { drop, ok } from '~/ingestion/framework/results'
+import { ParsedMessageData } from '~/ingestion/pipelines/sessionreplay/kafka/types'
+import { RetentionPeriod } from '~/ingestion/pipelines/sessionreplay/shared/constants'
 import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
+import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 
-import { SessionBatchContext } from './session-batch-context'
 import { SessionBatchMetrics } from './sessions/metrics'
 
 /**
- * Flush step: resolve per-session retention off the S3 write path.
+ * Record-phase batch step: resolve per-session retention for the whole batch in one call (batched
+ * Redis MGET + deduped Postgres fallback) and attach it to each element, before the record step
+ * generates keys and folds events in.
  *
- * Retention for the whole batch is resolved in one call (batched Redis MGET + deduped Postgres
- * fallback). An unresolvable session (deleted/unknown team, invalid value) is expected, not an
- * error: it's left out of the map, the write step skips it, and its offset still commits, so one
- * poison session can't wedge the whole batch. A transient failure (e.g. Redis) is thrown by the
- * service so the pipeline's retry wrapper re-runs the whole step.
- *
- * Additive: preserves the input batch context and adds `retentionMap`.
+ * A session whose retention can't be resolved (deleted/unknown team, invalid value) is dropped here
+ * — before any key generation or recording — so a poison session never reaches storage. A transient
+ * failure (e.g. Redis) is thrown by the service so the pipeline's retry wrapper can re-run the step.
  */
-export function createResolveRetentionStep<T extends SessionBatchContext>(
+export function createResolveRetentionStep<T extends { team: TeamForReplay; parsedMessage: ParsedMessageData }>(
     retentionService: RetentionService
-): ProcessingStep<T, T & { retentionMap: RetentionMap }> {
-    return async function resolveRetentionStep(batchContext) {
-        const sessions = batchContext.sessionBatchRecorder.getPendingSessions()
-        const resolutions = await retentionService.resolveSessionRetentions(sessions)
-
-        const retentionMap = new RetentionMap()
-        for (let i = 0; i < sessions.length; i++) {
-            const { teamId, sessionId } = sessions[i]
-            const resolution = resolutions[i]
+): BatchProcessingStep<T, T & { retentionPeriod: RetentionPeriod }> {
+    return async function resolveRetentionStep(values) {
+        const resolutions = await retentionService.resolveSessionRetentions(
+            values.map((value) => ({ teamId: value.team.teamId, sessionId: value.parsedMessage.session_id }))
+        )
+        return values.map((value, index) => {
+            const resolution = resolutions[index]
             if (resolution.resolved) {
-                retentionMap.set(teamId, sessionId, resolution.retentionPeriod)
-            } else {
-                // Permanent (deleted/unknown team) — drop this session from the batch.
-                SessionBatchMetrics.incrementSessionsDroppedDuringFlush()
-                logger.warn('🔁', 'session_replay_retention_unresolved_dropping_session', { sessionId, teamId })
+                return ok({ ...value, retentionPeriod: resolution.retentionPeriod })
             }
-        }
-        return ok({ ...batchContext, retentionMap })
+            SessionBatchMetrics.incrementSessionsDroppedMissingRetention()
+            logger.warn('🔁', 'session_replay_retention_unresolved_dropping_session', {
+                sessionId: value.parsedMessage.session_id,
+                teamId: value.team.teamId,
+            })
+            return drop('retention_unresolved')
+        })
     }
 }

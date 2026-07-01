@@ -50,6 +50,7 @@ describe('createRecordSessionEventStep', () => {
         team,
         parsedMessage: createParsedMessage(overrides),
         sessionBatchRecorder: mockBatchRecorder,
+        retentionPeriod: '30d',
     })
 
     const step = createRecordSessionEventStep({ isDebugLoggingEnabled: () => false })
@@ -67,10 +68,13 @@ describe('createRecordSessionEventStep', () => {
         await step(input)
 
         expect(mockBatchRecorder.record).toHaveBeenCalledTimes(1)
-        expect(mockBatchRecorder.record).toHaveBeenCalledWith({
-            team: defaultTeam,
-            message: input.parsedMessage,
-        })
+        expect(mockBatchRecorder.record).toHaveBeenCalledWith(
+            {
+                team: defaultTeam,
+                message: input.parsedMessage,
+            },
+            '30d'
+        )
     })
 
     it('should return ok result with input preserved', async () => {
