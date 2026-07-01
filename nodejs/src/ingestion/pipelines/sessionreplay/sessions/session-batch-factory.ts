@@ -49,6 +49,30 @@ export interface SessionBatchFactoryConfig {
  * factory holds no current-batch state — the live recorder lives in the pipeline's batch context —
  * which keeps batch lifecycle entirely inside the accumulating pipeline and leaves room for it to
  * run concurrent batches later.
+ *
+ * How the pieces fit (see `createSessionReplayAccumulatingPipeline` in `session-replay-pipeline.ts`):
+ *
+ * ```
+ * AccumulatingPipeline
+ * ├── beforeBatch  → SessionBatchFactory.createBatch()  ── mints the recorder for this cycle
+ * ├── record       → recorder.record(message)           ── folds events into the recorder
+ * └── flush (on size/age trigger)
+ *     ├── resolveRetention → retentionService            ── per-session retention, off the S3 path
+ *     └── write            → recorder.flushToStorage()   ── S3 write + metadata
+ * ```
+ *
+ * One recorder writes one batch file per retention period, each a sequence of independently-readable,
+ * per-session compressed blocks (see {@link SessionBatchRecorder} for the on-disk block layout):
+ *
+ * ```
+ * Session batch (one recorder / one flush)
+ * ├── Batch file (30d retention)
+ * │   ├── Compressed session block  →  JSONL: [windowId, event], [windowId, event], ...
+ * │   └── ...
+ * ├── Batch file (1y retention)
+ * │   └── ...
+ * └── ...
+ * ```
  */
 export class SessionBatchFactory {
     private readonly maxEventsPerSessionPerBatch: number

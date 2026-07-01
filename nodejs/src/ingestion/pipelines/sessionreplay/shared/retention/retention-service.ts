@@ -9,6 +9,20 @@ import { RedisPool, TeamId } from '~/types'
 
 import { RetentionServiceMetrics } from './metrics'
 
+/**
+ * A permanent retention lookup failure — the team is unknown/deleted or the stored value is
+ * invalid. Marked non-retriable (unlike a transient Redis failure), so retry wrappers give up on
+ * it and callers drop the session instead of retrying forever.
+ */
+export class RetentionLookupError extends Error {
+    public readonly isRetriable = false
+
+    constructor(message: string) {
+        super(message)
+        this.name = 'RetentionLookupError'
+    }
+}
+
 function isValidRetentionPeriod(retentionPeriod: string): retentionPeriod is RetentionPeriod {
     return ValidRetentionPeriods.includes(retentionPeriod as RetentionPeriod)
 }
@@ -29,7 +43,7 @@ export class RetentionService {
 
         if (retentionPeriod === null) {
             RetentionServiceMetrics.incrementLookupErrors()
-            throw new Error(`Error during retention period lookup: Unknown team id ${teamId}`)
+            throw new RetentionLookupError(`Error during retention period lookup: Unknown team id ${teamId}`)
         }
 
         return retentionPeriod
@@ -63,7 +77,7 @@ export class RetentionService {
             return retentionPeriod
         } else {
             RetentionServiceMetrics.incrementLookupErrors()
-            throw new Error(`Error during retention period lookup: Got invalid value ${retentionPeriod}`)
+            throw new RetentionLookupError(`Error during retention period lookup: Got invalid value ${retentionPeriod}`)
         }
     }
 
@@ -75,7 +89,7 @@ export class RetentionService {
             return retentionPeriodDays
         } else {
             RetentionServiceMetrics.incrementLookupErrors()
-            throw new Error(`Error during retention period lookup: Got invalid value ${retentionPeriod}`)
+            throw new RetentionLookupError(`Error during retention period lookup: Got invalid value ${retentionPeriod}`)
         }
     }
 }

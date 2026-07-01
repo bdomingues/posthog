@@ -5,13 +5,18 @@ import { IngestionOutputs } from '~/common/outputs/ingestion-outputs'
 import { EventIngestionRestrictionManager } from '~/common/utils/event-ingestion-restrictions'
 import { PromiseScheduler } from '~/common/utils/promise-scheduler'
 import { createApplyEventRestrictionsStep, createParseHeadersStep } from '~/ingestion/common/steps/event-preprocessing'
-import { AccumulationContext } from '~/ingestion/framework/accumulating-pipeline'
+import { AccumulatingPipeline, AccumulationContext } from '~/ingestion/framework/accumulating-pipeline'
 import { BatchPipeline } from '~/ingestion/framework/batch-pipeline.interface'
-import { newBatchPipelineBuilder } from '~/ingestion/framework/builders'
+import { newAccumulatingPipeline, newBatchPipelineBuilder } from '~/ingestion/framework/builders'
 import { TopHogRegistry, createTopHogWrapper, sum, timer } from '~/ingestion/framework/extensions/tophog'
 import { PipelineConfig } from '~/ingestion/framework/result-handling-pipeline'
 import { ParsedMessageData } from '~/ingestion/pipelines/sessionreplay/kafka/types'
-import { SessionBatchContext } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-factory'
+import {
+    SessionBatchContext,
+    SessionBatchFactory,
+} from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-factory'
+import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
+import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { ValueMatcher } from '~/types'
@@ -19,6 +24,9 @@ import { ValueMatcher } from '~/types'
 import { createLibVersionMonitorStep } from './lib-version-monitor-step'
 import { createParseMessageStep } from './parse-message-step'
 import { createRecordSessionEventStep } from './record-session-event-step'
+import { createSessionBatchBeforeBatchStep } from './session-batch-before-batch-step'
+import { createResolveRetentionStep } from './session-batch-resolve-retention-step'
+import { createWriteStep } from './session-batch-write-step'
 import { createTeamFilterStep } from './team-filter-step'
 
 export interface SessionReplayPipelineInput {
@@ -28,6 +36,41 @@ export interface SessionReplayPipelineInput {
 export interface SessionReplayPipelineOutput {
     team: TeamForReplay
     parsedMessage: ParsedMessageData
+}
+
+/**
+ * The per-message record pipeline wrapped by the accumulating pipeline. Its input carries the
+ * batch context (the recorder) tagged on by the accumulating pipeline, which the record step
+ * folds events into.
+ */
+export type SessionReplayRecordPipeline = BatchPipeline<
+    SessionReplayPipelineInput & SessionBatchContext & AccumulationContext,
+    SessionReplayPipelineOutput,
+    { message: Message },
+    { message: Message },
+    OverflowOutput
+>
+
+export type SessionReplayAccumulatingPipeline = AccumulatingPipeline<
+    SessionReplayPipelineInput,
+    SessionReplayPipelineOutput,
+    { message: Message },
+    { message: Message },
+    SessionBatchContext,
+    SessionBlockMetadata[],
+    Record<string, never>,
+    OverflowOutput
+>
+
+export interface SessionReplayAccumulatingPipelineConfig {
+    recordPipeline: SessionReplayRecordPipeline
+    sessionBatchFactory: SessionBatchFactory
+    /** Resolves per-session retention off the S3 write path in the resolve-retention flush step */
+    retentionService: RetentionService
+    /** Maximum raw size (before compression) of a batch in bytes before it is flushed */
+    maxBatchSizeBytes: number
+    /** Maximum age of a batch in milliseconds before it is flushed */
+    maxBatchAgeMs: number
 }
 
 export interface SessionReplayPipelineConfig {
@@ -52,15 +95,7 @@ export interface SessionReplayPipelineConfig {
  * 4. Version Monitor - Check library version and emit warnings for old versions
  * 5. Record - Record parsed messages to session batches
  */
-export function createSessionReplayPipeline(
-    config: SessionReplayPipelineConfig
-): BatchPipeline<
-    SessionReplayPipelineInput & SessionBatchContext & AccumulationContext,
-    SessionReplayPipelineOutput,
-    { message: Message },
-    { message: Message },
-    OverflowOutput
-> {
+export function createSessionReplayPipeline(config: SessionReplayPipelineConfig): SessionReplayRecordPipeline {
     const {
         outputs,
         eventIngestionRestrictionManager,
@@ -157,4 +192,44 @@ export function createSessionReplayPipeline(
         .build()
 
     return pipeline
+}
+
+/**
+ * Wraps the record pipeline in an accumulating pipeline: the record pipeline folds events into a
+ * recorder minted per cycle by the factory; the flush pipeline resolves retention off the S3 write
+ * path (retrying transient failures) and then writes the recorder to storage on a size or age
+ * trigger. Offset commit stays with the consumer — it commits on each flushed result.
+ */
+export function createSessionReplayAccumulatingPipeline(
+    config: SessionReplayAccumulatingPipelineConfig
+): SessionReplayAccumulatingPipeline {
+    const { recordPipeline, sessionBatchFactory, retentionService, maxBatchSizeBytes, maxBatchAgeMs } = config
+
+    return newAccumulatingPipeline<
+        SessionReplayPipelineInput,
+        SessionReplayPipelineOutput,
+        { message: Message },
+        { message: Message },
+        SessionBatchContext,
+        SessionBlockMetadata[],
+        Record<string, never>,
+        OverflowOutput
+    >({
+        beforeBatch: (builder) => builder.pipe(createSessionBatchBeforeBatchStep(sessionBatchFactory)),
+        pipeline: recordPipeline,
+        flush: (builder) =>
+            builder.sequentially((b) =>
+                b
+                    // Retry transient retention failures (e.g. Redis). Permanent failures (deleted
+                    // team, invalid value) are non-retriable — the step drops those sessions instead.
+                    .retry((rb) => rb.pipe(createResolveRetentionStep(retentionService)), {
+                        tries: 3,
+                        sleepMs: 100,
+                        name: 'session_replay_retention',
+                    })
+                    .pipe(createWriteStep())
+            ),
+        shouldFlush: (batchContext) => batchContext.sessionBatchRecorder.size >= maxBatchSizeBytes,
+        maxBatchAgeMs,
+    })
 }

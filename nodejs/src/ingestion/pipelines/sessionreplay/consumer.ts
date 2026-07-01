@@ -16,12 +16,13 @@ import { PromiseScheduler } from '~/common/utils/promise-scheduler'
 import { IngestionConsumerConfig } from '~/ingestion/config'
 import { createOkContext } from '~/ingestion/framework/helpers'
 import { TopHog } from '~/ingestion/framework/tophog/tophog'
-import { SessionReplayPipelineConfig, createSessionReplayPipeline } from '~/ingestion/pipelines/sessionreplay'
 import {
     SessionReplayAccumulatingPipeline,
+    SessionReplayPipelineConfig,
     SessionReplayRecordPipeline,
     createSessionReplayAccumulatingPipeline,
-} from '~/ingestion/pipelines/sessionreplay/session-replay-accumulating-pipeline'
+    createSessionReplayPipeline,
+} from '~/ingestion/pipelines/sessionreplay'
 import { getBlockEncryptor } from '~/ingestion/pipelines/sessionreplay/shared/crypto'
 import { SessionFeatureStore } from '~/ingestion/pipelines/sessionreplay/shared/features/session-feature-store'
 import { getKeyStore } from '~/ingestion/pipelines/sessionreplay/shared/keystore'
