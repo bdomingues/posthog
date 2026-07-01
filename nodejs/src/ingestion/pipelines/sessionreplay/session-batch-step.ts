@@ -13,8 +13,6 @@ export function createCreateSessionBatchStep(
     sessionBatchFactory: SessionBatchFactory
 ): ProcessingStep<BeforeAccumulationInput, BeforeAccumulationOutput<SessionBatchContext>> {
     return function createSessionBatchStep(input) {
-        return Promise.resolve(
-            ok({ batchContext: { sessionBatchRecorder: sessionBatchFactory.create(), batchId: input.batchId } })
-        )
+        return Promise.resolve(ok({ batchContext: { ...input, sessionBatchRecorder: sessionBatchFactory.create() } }))
     }
 }
