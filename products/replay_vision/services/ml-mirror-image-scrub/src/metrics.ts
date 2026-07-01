@@ -6,19 +6,27 @@ import { Counter, register } from 'prom-client'
 export class ScrubMetrics {
     private static readonly scrubbed = new Counter({
         name: 'ml_mirror_image_scrub_scrubbed_total',
-        help: 'Images scrubbed and written to S3',
+        help: 'Images scrubbed and buffered for a shard write',
     })
     private static readonly failed = new Counter({
         name: 'ml_mirror_image_scrub_failed_total',
-        help: 'Images whose scrub/S3 write failed (image stays unscrubbed; reference resolves to nothing)',
-    })
-    private static readonly skipExists = new Counter({
-        name: 'ml_mirror_image_scrub_skip_exists_total',
-        help: 'Images skipped because the scrubbed object already exists in S3 (idempotent redelivery)',
+        help: 'Images whose scrub failed (skipped; the reference resolves to nothing)',
     })
     private static readonly mismatch = new Counter({
         name: 'ml_mirror_image_scrub_key_content_mismatch_total',
         help: 'Messages dropped because the key hash did not match the value bytes (forged/corrupt key)',
+    })
+    private static readonly shardsWritten = new Counter({
+        name: 'ml_mirror_image_scrub_shards_written_total',
+        help: 'Shard objects (+ their parquet index) written to S3',
+    })
+    private static readonly shardImages = new Counter({
+        name: 'ml_mirror_image_scrub_shard_images_total',
+        help: 'Images written into shards',
+    })
+    private static readonly shardBytes = new Counter({
+        name: 'ml_mirror_image_scrub_shard_bytes_total',
+        help: 'Scrubbed image bytes written into shards',
     })
 
     public static incScrubbed(): void {
@@ -27,11 +35,13 @@ export class ScrubMetrics {
     public static incFailed(): void {
         this.failed.inc()
     }
-    public static incSkipExists(): void {
-        this.skipExists.inc()
-    }
     public static incMismatch(): void {
         this.mismatch.inc()
+    }
+    public static observeShard(images: number, bytes: number): void {
+        this.shardsWritten.inc()
+        this.shardImages.inc(images)
+        this.shardBytes.inc(bytes)
     }
 }
 

@@ -14,6 +14,9 @@ export interface Config {
     // accessKeyId/secretAccessKey are optional: when unset (production against real S3), makeS3 omits
     // them so the AWS SDK default chain resolves the IRSA role. Set them locally for SeaweedFS/MinIO.
     s3: { endpoint: string; region: string; bucket: string; accessKeyId?: string; secretAccessKey?: string }
+    // Shard-flush thresholds: buffer scrubbed images until any of these trips, then write one shard +
+    // index per team. Bigger shards = fewer, cheaper S3 writes; the interval bounds worst-case latency.
+    flush: { maxImages: number; maxBytes: number; intervalMs: number }
 }
 
 export function loadConfig(): Config {
@@ -21,6 +24,11 @@ export function loadConfig(): Config {
         kafkaBrokers: (process.env.KAFKA_BROKERS ?? 'localhost:9092').split(','),
         topic: process.env.IMAGE_SCRUB_TOPIC ?? IMAGE_SCRUB_TOPIC,
         consumerGroup: process.env.IMAGE_SCRUB_GROUP ?? 'ml-mirror-image-scrub-consumer',
+        flush: {
+            maxImages: Number(process.env.IMAGE_SCRUB_FLUSH_MAX_IMAGES ?? 1000),
+            maxBytes: Number(process.env.IMAGE_SCRUB_FLUSH_MAX_BYTES ?? 128 * 1024 * 1024),
+            intervalMs: Number(process.env.IMAGE_SCRUB_FLUSH_INTERVAL_MS ?? 30_000),
+        },
         // Read the standard PostHog object-storage env (so prod points at SESSION_RECORDING_V2_S3 /
         // OBJECT_STORAGE_* config, not a hardcoded endpoint). Default to SeaweedFS, the direction of
         // travel. If your local stack runs the MinIO-style `objectstorage` on :19000 instead, set

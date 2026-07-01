@@ -1,7 +1,7 @@
 /** S3 helpers plus a topic-ensure for the consumer worker (and the local produce CLI). Producer-side
  *  Redis dedup + Kafka producing live in the ml-mirror pipeline (nodejs), not here — the consumer only
  *  reads already-routed images off the topic and writes the scrubbed result to S3. */
-import { CreateBucketCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import type { Kafka } from 'kafkajs'
 
 import type { Config } from './config.ts'
@@ -47,23 +47,4 @@ export async function ensureBucket(s3: S3Client, bucket: string): Promise<void> 
             }
         }
     }
-}
-
-export async function s3Exists(s3: S3Client, bucket: string, key: string): Promise<boolean> {
-    try {
-        await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
-        return true
-    } catch (e) {
-        const status = (e as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
-        if (status === 404) {
-            return false
-        }
-        // Only 404 means "absent". A 403 is a permissions problem (missing s3:HeadObject, bad policy):
-        // surfacing it fails loudly instead of masking the misconfig as a cache miss and re-scrubbing.
-        throw e
-    }
-}
-
-export async function s3Put(s3: S3Client, bucket: string, key: string, body: Buffer): Promise<void> {
-    await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: 'image/png' }))
 }
