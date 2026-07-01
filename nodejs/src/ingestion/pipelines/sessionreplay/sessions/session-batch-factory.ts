@@ -55,7 +55,7 @@ export interface SessionBatchFactoryConfig {
  * ```
  * AccumulatingPipeline
  * ├── beforeBatch  → SessionBatchFactory.createBatch()  ── mints the recorder for this cycle
- * ├── record       → recorder.record(message)           ── folds events into the recorder
+ * ├── pipeline     → recorder.record(message)           ── record step folds events into the recorder
  * └── flush (on size/age trigger)
  *     ├── resolveRetention → retentionService            ── per-session retention, off the S3 path
  *     └── write            → recorder.flushToStorage()   ── S3 write + metadata
