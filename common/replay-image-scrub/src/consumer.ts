@@ -18,6 +18,17 @@ import { loadConfig } from './config.ts'
 import { isImageRef, s3KeyForRef } from './content-ref.ts'
 import { type Models, advancedScrub, loadModels } from './scrub.ts'
 
+/** Run fn over items with at most `concurrency` in flight — bounds CPU (scrub) and S3 connections. */
+async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
+    let next = 0
+    const worker = async (): Promise<void> => {
+        while (next < items.length) {
+            await fn(items[next++])
+        }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()))
+}
+
 async function handle(
     models: Models,
     s3: ReturnType<typeof makeS3>,
@@ -47,21 +58,28 @@ async function main(): Promise<void> {
     await consumer.subscribe({ topic: cfg.topic, fromBeginning: false })
     console.log(`consuming ${cfg.topic} (group ${cfg.consumerGroup}) -> s3://${cfg.s3.bucket} @ ${cfg.s3.endpoint}`)
 
+    // eachBatch so we can scrub + write S3 with bounded concurrency: sequential S3 writes (one RTT
+    // each) would never keep up with the ingest rate, so a batch's images are processed in parallel.
+    const concurrency = Number(process.env.SCRUB_CONCURRENCY ?? 8)
     await consumer.run({
-        eachMessage: async ({ message }) => {
-            const ref = message.key?.toString('utf8')
-            const bytes = message.value
-            if (!ref || !isImageRef(ref) || !bytes) {
-                console.warn('skip malformed message', { ref })
-                return
-            }
-            try {
-                console.log(`${ref}: ${await handle(models, s3, cfg.s3.bucket, ref, bytes)}`)
-            } catch (e) {
-                // Don't wedge the partition on one bad image; it stays unscrubbed (reference resolves
-                // to nothing), which is acceptable for the training mirror.
-                console.error(`${ref}: scrub failed: ${String(e)}`)
-            }
+        eachBatch: async ({ batch, resolveOffset, heartbeat, isRunning, isStale }) => {
+            const jobs = batch.messages.map((m) => ({ ref: m.key?.toString('utf8'), bytes: m.value, offset: m.offset }))
+            await mapPool(jobs, concurrency, async (job) => {
+                if (!isRunning() || isStale()) {
+                    return
+                }
+                if (job.ref && isImageRef(job.ref) && job.bytes) {
+                    try {
+                        console.log(`${job.ref}: ${await handle(models, s3, cfg.s3.bucket, job.ref, job.bytes)}`)
+                    } catch (e) {
+                        // Don't wedge the partition on one bad image; it stays unscrubbed (reference
+                        // resolves to nothing), which is acceptable for the training mirror.
+                        console.error(`${job.ref}: scrub failed: ${String(e)}`)
+                    }
+                }
+                resolveOffset(job.offset)
+                await heartbeat()
+            })
         },
     })
 

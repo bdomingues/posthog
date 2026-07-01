@@ -16,7 +16,7 @@ import { readFile } from 'node:fs/promises'
 
 import { KafkaTopicProducer, RedisDedupStore, ensureTopic } from './clients.ts'
 import { loadConfig } from './config.ts'
-import { emitImageForScrub } from './producer.ts'
+import { emitImagesForScrub } from './producer.ts'
 import { routeImage } from './routing.ts'
 import { decodeSrc } from './src-image.ts'
 
@@ -45,7 +45,7 @@ async function main(): Promise<void> {
     await producer.connect()
 
     try {
-        const result = await emitImageForScrub(teamId, bytes, {
+        const [result] = await emitImagesForScrub([{ teamId, bytes }], {
             dedup: new RedisDedupStore(redis),
             producer: new KafkaTopicProducer(producer, cfg.topic),
         })
