@@ -16,6 +16,9 @@ import { ReferenceLines } from '../../overlays/ReferenceLine'
 import { ValueLabels } from '../../overlays/ValueLabels'
 import { buildGoalLineReferenceLines, goalLineValueDomain, type GoalLineConfig } from '../../utils/goal-lines'
 import {
+    buildYAxes,
+    normalizeYAxisList,
+    primaryYAxisConfig,
     useXTickFormatter,
     useYTickFormatter,
     type XAxisConfig,
@@ -30,7 +33,8 @@ import {
 
 export interface TimeSeriesBarChartConfig {
     xAxis?: XAxisConfig
-    yAxis?: YAxisConfig
+    /** Single object for a standard left axis; array for dual left+right axes (pass `id` and `position` on each). */
+    yAxis?: YAxisConfig | YAxisConfig[]
     valueLabels?: boolean | ValueLabelsConfig
     goalLines?: GoalLineConfig[]
     /** Defaults to `stacked`. */
@@ -96,8 +100,12 @@ export function TimeSeriesBarChart<Meta = unknown>({
         animateHover,
         legend,
     } = config ?? {}
+    const axisList = useMemo(() => normalizeYAxisList(yAxis), [yAxis])
+    const primaryYAxis = useMemo<YAxisConfig | undefined>(() => primaryYAxisConfig(axisList), [axisList])
+    const yAxes = useMemo(() => (Array.isArray(yAxis) ? buildYAxes(axisList) : undefined), [yAxis, axisList])
+
     const xTickFormatter = useXTickFormatter(xAxis, labels)
-    const yTickFormatter = useYTickFormatter(yAxis)
+    const yTickFormatter = useYTickFormatter(primaryYAxis)
 
     const { visibleSeries, legendProps } = useChartLegend(series, theme, legend)
 
@@ -119,20 +127,21 @@ export function TimeSeriesBarChart<Meta = unknown>({
     const valueDomain = useMemo(() => goalLineValueDomain(referenceLines), [referenceLines])
 
     const barChartConfig: BarChartConfig = {
-        yScaleType: yAxis?.scale,
+        yScaleType: primaryYAxis?.scale,
         xTickFormatter,
         yTickFormatter,
         hideXAxis: xAxis?.hide,
-        hideYAxis: yAxis?.hide,
+        hideYAxis: primaryYAxis?.hide,
         xAxisLabel: xAxis?.label,
-        yAxisLabel: yAxis?.label,
-        showGrid: yAxis?.showGrid,
+        yAxisLabel: primaryYAxis?.label,
+        showGrid: primaryYAxis?.showGrid,
         showAxisLines,
         barLayout,
         axisOrientation,
         showCrosshair,
         tooltip: tooltipConfig,
         animateHover,
+        yAxes,
         bars: {
             cornerRadius: barCornerRadius,
             divergingStack,
