@@ -26,6 +26,7 @@ jest.mock('~/ingestion/common/steps/event-preprocessing', () => ({
 function createMockBatchRecorder(): jest.Mocked<SessionBatchRecorder> {
     return {
         record: jest.fn().mockResolvedValue(undefined),
+        getRetention: jest.fn().mockReturnValue(undefined),
     } as unknown as jest.Mocked<SessionBatchRecorder>
 }
 

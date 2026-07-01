@@ -12,6 +12,7 @@ import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared
 import { SessionMetadataSink } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-metadata-store'
 import { KeyStore, RecordingEncryptor, SessionKey } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { MessageWithTeam } from '~/ingestion/pipelines/sessionreplay/teams/types'
+import { TeamId } from '~/types'
 
 import { SessionBatchFileStorage } from './session-batch-file-storage'
 import { SessionConsoleLogRecorder } from './session-console-log-recorder'
@@ -256,6 +257,21 @@ export class SessionBatchRecorder {
         })
 
         return bytesWritten
+    }
+
+    /**
+     * Returns the retention already resolved for a session in this batch, or undefined if the batch
+     * hasn't seen it yet. Lets the resolve-retention step skip re-resolving sessions it already holds.
+     */
+    public getRetention(teamId: TeamId, sessionId: string): RetentionPeriod | undefined {
+        const teamSessionKey = `${teamId}$${sessionId}`
+        for (const sessions of this.partitionSessions.values()) {
+            const state = sessions.get(teamSessionKey)
+            if (state) {
+                return state[4]
+            }
+        }
+        return undefined
     }
 
     /**

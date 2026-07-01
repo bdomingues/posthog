@@ -434,6 +434,22 @@ describe('SessionBatchRecorder', () => {
             )
         })
 
+        it('getRetention returns the retention a session was recorded with, undefined for unknown', async () => {
+            await record(
+                createMessage('session1', [
+                    {
+                        type: EventType.Meta,
+                        timestamp: DateTime.fromISO('2025-01-01T10:00:00.000Z').toMillis(),
+                        data: {},
+                    },
+                ]),
+                '1y'
+            )
+
+            expect(recorder.getRetention(1, 'session1')).toBe('1y')
+            expect(recorder.getRetention(1, 'never-seen')).toBeUndefined()
+        })
+
         it('should accumulate events for the same session', async () => {
             const messages = [
                 createMessage('session1', [

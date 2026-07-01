@@ -117,6 +117,7 @@ describe('session replay pipeline integration', () => {
         mockRecorder = {
             record: jest.fn().mockResolvedValue(100),
             size: 100,
+            getRetention: jest.fn().mockReturnValue(undefined),
             flushToStorage: jest.fn().mockResolvedValue([blockMetadata('session-1')]),
             discardPartition: jest.fn(),
         } as unknown as jest.Mocked<SessionBatchRecorder>
@@ -127,6 +128,7 @@ describe('session replay pipeline integration', () => {
             ({
                 record: jest.fn().mockResolvedValue(0),
                 size: 0,
+                getRetention: jest.fn().mockReturnValue(undefined),
                 flushToStorage: jest.fn().mockResolvedValue([]),
                 discardPartition: jest.fn(),
             }) as unknown as SessionBatchRecorder
