@@ -1,5 +1,6 @@
 import { defaultConfig } from '~/common/config/config'
 import { PostgresRouter, PostgresUse } from '~/common/utils/db/postgres'
+import { ValidRetentionPeriods } from '~/ingestion/pipelines/sessionreplay/shared/constants'
 import { getFirstTeam, resetTestDatabase } from '~/tests/helpers/sql'
 
 import { TeamService } from './team-service'
@@ -21,17 +22,25 @@ describe('TeamService (integration)', () => {
         await postgres.end()
     })
 
-    it('deserializes the retention period and token from a real Postgres row', async () => {
-        // A value distinct from the seeded default, so we know it's read from the actual column.
-        await postgres.query(
-            PostgresUse.COMMON_WRITE,
-            `UPDATE posthog_team SET session_recording_retention_period = '90d' WHERE id = $1`,
-            [teamId],
-            'test-set-retention'
-        )
-        const teamService = new TeamService(postgres)
+    // Driven off the authoritative allowed set: every period Postgres is allowed to hold must store
+    // and deserialize, and a newly added period is covered here automatically.
+    it.each([...ValidRetentionPeriods])(
+        'stores and deserializes retention period %s from a real Postgres row',
+        async (period) => {
+            await postgres.query(
+                PostgresUse.COMMON_WRITE,
+                `UPDATE posthog_team SET session_recording_retention_period = $1 WHERE id = $2`,
+                [period, teamId],
+                'test-set-retention'
+            )
+            const teamService = new TeamService(postgres)
 
-        expect(await teamService.getRetentionPeriodByTeamId(teamId)).toBe('90d')
+            expect(await teamService.getRetentionPeriodByTeamId(teamId)).toBe(period)
+        }
+    )
+
+    it('deserializes the team token', async () => {
+        const teamService = new TeamService(postgres)
         expect(await teamService.getTeamByToken(apiToken)).toMatchObject({ teamId })
     })
 })
