@@ -226,14 +226,13 @@ class ScheduledChangeSerializer(serializers.ModelSerializer):
         approval never covered — e.g. move it earlier to apply immediately. Deleting and recreating
         the schedule re-gates from scratch, so this only forbids retiming a change mid-approval.
         """
-        if instance.change_request_id is None:
-            return
         change_request = instance.change_request
-        if change_request.state not in (ChangeRequestState.PENDING, ChangeRequestState.APPROVED):
+        if change_request is None or change_request.state not in (
+            ChangeRequestState.PENDING,
+            ChangeRequestState.APPROVED,
+        ):
             return
-        changed = [
-            field for field in self.TIMING_FIELDS if field in data and data[field] != getattr(instance, field)
-        ]
+        changed = [field for field in self.TIMING_FIELDS if field in data and data[field] != getattr(instance, field)]
         if changed:
             raise serializers.ValidationError(
                 {
