@@ -138,6 +138,15 @@ export class SessionBatchMetrics {
         buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
     })
 
+    private static readonly sessionsDroppedDuringFlush = new Counter({
+        name: 'recording_blob_ingestion_v2_sessions_dropped_during_flush_total',
+        help: 'Number of sessions dropped during flush because retention could not be resolved (e.g. deleted team)',
+    })
+
+    public static incrementSessionsDroppedDuringFlush(count: number = 1): void {
+        this.sessionsDroppedDuringFlush.inc(count)
+    }
+
     public static incrementBatchesFlushed(): void {
         this.batchesFlushed.inc()
     }

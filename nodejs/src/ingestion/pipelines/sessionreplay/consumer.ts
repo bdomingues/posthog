@@ -90,6 +90,7 @@ export class SessionRecordingIngester {
     private readonly redisPool: RedisPool
     private readonly restrictionRedisPool: RedisPool
     private readonly teamService: TeamService
+    private readonly retentionService: RetentionService
     private readonly fileStorage: SessionBatchFileStorage
     private readonly eventIngestionRestrictionManagerComponent: EventIngestionRestrictionManagerComponent
     private eventIngestionRestrictionManager!: EventIngestionRestrictionManager
@@ -162,7 +163,7 @@ export class SessionRecordingIngester {
             { pipeline: 'session_recordings' }
         )
 
-        const retentionService = new RetentionService(this.redisPool, this.teamService)
+        this.retentionService = new RetentionService(this.redisPool, this.teamService)
 
         this.offsetManager = new KafkaOffsetManager(this.commitOffsets.bind(this), this.topic)
         this.maxBatchSizeBytes = this.config.SESSION_RECORDING_MAX_BATCH_SIZE_KB * 1024
@@ -184,8 +185,7 @@ export class SessionRecordingIngester {
                       s3Client,
                       this.config.SESSION_RECORDING_V2_S3_BUCKET,
                       this.config.SESSION_RECORDING_V2_S3_PREFIX,
-                      this.config.SESSION_RECORDING_V2_S3_TIMEOUT_MS,
-                      retentionService
+                      this.config.SESSION_RECORDING_V2_S3_TIMEOUT_MS
                   )
                 : new BlackholeSessionBatchFileStorage())
 
@@ -206,7 +206,7 @@ export class SessionRecordingIngester {
         this.keyStore =
             collaborators.keyStore ??
             new MemoryCachedKeyStore(
-                getKeyStore(retentionService, region, {
+                getKeyStore(this.retentionService, region, {
                     kmsEndpoint: config.SESSION_RECORDING_KMS_ENDPOINT,
                     dynamoDBEndpoint: config.SESSION_RECORDING_DYNAMODB_ENDPOINT,
                 })
@@ -315,6 +315,7 @@ export class SessionRecordingIngester {
         this.accumulatingPipeline = createSessionReplayAccumulatingPipeline({
             recordPipeline: this.recordPipeline,
             sessionBatchFactory: this.sessionBatchFactory,
+            retentionService: this.retentionService,
             maxBatchSizeBytes: this.maxBatchSizeBytes,
             maxBatchAgeMs: this.maxBatchAgeMs,
         })

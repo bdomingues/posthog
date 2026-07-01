@@ -3,6 +3,7 @@ import { v7 as uuidv7 } from 'uuid'
 import { logger } from '~/common/utils/logger'
 import { captureException } from '~/common/utils/posthog'
 import { KafkaOffsetManager } from '~/ingestion/pipelines/sessionreplay/kafka/offset-manager'
+import { RetentionPeriod } from '~/ingestion/pipelines/sessionreplay/shared/constants'
 import {
     SessionFeatureBlock,
     SessionFeatureStore,
@@ -11,6 +12,7 @@ import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared
 import { SessionMetadataSink } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-metadata-store'
 import { KeyStore, RecordingEncryptor, SessionKey } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { MessageWithTeam } from '~/ingestion/pipelines/sessionreplay/teams/types'
+import { TeamId } from '~/types'
 
 import { SessionBatchMetrics } from './metrics'
 import { SessionBatchFileStorage } from './session-batch-file-storage'
@@ -274,12 +276,27 @@ export class SessionBatchRecorder {
     }
 
     /**
-     * Flushes the session recordings to storage and commits Kafka offsets
+     * Returns the team/session of every buffered session, so retention can be resolved off the
+     * storage write path (in the resolve-retention flush step) before flushToStorage runs.
+     */
+    public getPendingSessions(): { teamId: TeamId; sessionId: string }[] {
+        const pending: { teamId: TeamId; sessionId: string }[] = []
+        for (const sessions of this.partitionSessions.values()) {
+            for (const [sessionBlockRecorder] of sessions.values()) {
+                pending.push({ teamId: sessionBlockRecorder.teamId, sessionId: sessionBlockRecorder.sessionId })
+            }
+        }
+        return pending
+    }
+
+    /**
+     * Flushes the session recordings to storage and commits Kafka offsets.
      *
+     * @param retentionByKey - Retention period per `${teamId}$${sessionId}`, resolved upstream.
      * @throws If the flush operation fails
      */
-    public async flush(): Promise<SessionBlockMetadata[]> {
-        const blockMetadata = await this.flushToStorage()
+    public async flush(retentionByKey: Map<string, RetentionPeriod>): Promise<SessionBlockMetadata[]> {
+        const blockMetadata = await this.flushToStorage(retentionByKey)
         await this.offsetManager.commit()
         return blockMetadata
     }
@@ -291,7 +308,7 @@ export class SessionBatchRecorder {
      *
      * @throws If the flush operation fails
      */
-    public async flushToStorage(): Promise<SessionBlockMetadata[]> {
+    public async flushToStorage(retentionByKey: Map<string, RetentionPeriod>): Promise<SessionBlockMetadata[]> {
         logger.info('🔁', 'session_batch_recorder_flushing', {
             partitions: this.partitionSessions.size,
             totalSize: this._size,
@@ -320,6 +337,15 @@ export class SessionBatchRecorder {
                     featureRecorder,
                     sessionKey,
                 ] of sessions.values()) {
+                    // Skip sessions the resolve-retention step dropped (e.g. deleted team) — their
+                    // offsets still commit, so the poison session doesn't wedge the batch.
+                    const retentionPeriod = retentionByKey.get(
+                        `${sessionBlockRecorder.teamId}$${sessionBlockRecorder.sessionId}`
+                    )
+                    if (retentionPeriod === undefined) {
+                        continue
+                    }
+
                     const {
                         buffer,
                         eventCount,
@@ -362,6 +388,7 @@ export class SessionBatchRecorder {
                         buffer: encryptedBuffer,
                         teamId: sessionBlockRecorder.teamId,
                         sessionId: sessionBlockRecorder.sessionId,
+                        retentionPeriod,
                     })
 
                     blockMetadata.push({
@@ -393,8 +420,9 @@ export class SessionBatchRecorder {
 
                     totalEvents += eventCount
                     totalBytes += bytesWritten
+                    // Count written sessions (skipped/dropped ones are excluded)
+                    totalSessions += 1
                 }
-                totalSessions += sessions.size
             }
 
             await writer.finish()

@@ -1,3 +1,4 @@
+import { RetentionPeriod } from '~/ingestion/pipelines/sessionreplay/shared/constants'
 import { TeamId } from '~/types'
 
 export interface WriteSessionData {
@@ -7,6 +8,9 @@ export interface WriteSessionData {
     sessionId: string
 
     teamId: TeamId
+
+    /** Retention period resolved before the write, so the write path does no Redis lookup. */
+    retentionPeriod: RetentionPeriod
 }
 
 export interface WriteSessionResult {
