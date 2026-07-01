@@ -447,6 +447,41 @@ describe('SessionBatchRecorder', () => {
             expect(metadata[0].sessionId).toBe('session1')
         })
 
+        it('passes each session its own resolved retention period through to the writer', async () => {
+            await recorder.record(
+                createMessage('session1', [
+                    {
+                        type: EventType.Meta,
+                        timestamp: DateTime.fromISO('2025-01-01T10:00:00.000Z').toMillis(),
+                        data: {},
+                    },
+                ])
+            )
+            await recorder.record(
+                createMessage('session2', [
+                    {
+                        type: EventType.Meta,
+                        timestamp: DateTime.fromISO('2025-01-01T10:00:01.000Z').toMillis(),
+                        data: {},
+                    },
+                ])
+            )
+
+            await recorder.flushToStorage(
+                new Map<string, RetentionPeriod>([
+                    ['1$session1', '30d'],
+                    ['1$session2', '1y'],
+                ])
+            )
+
+            expect(mockWriter.writeSession).toHaveBeenCalledWith(
+                expect.objectContaining({ sessionId: 'session1', retentionPeriod: '30d' })
+            )
+            expect(mockWriter.writeSession).toHaveBeenCalledWith(
+                expect.objectContaining({ sessionId: 'session2', retentionPeriod: '1y' })
+            )
+        })
+
         it('should accumulate events for the same session', async () => {
             const messages = [
                 createMessage('session1', [
