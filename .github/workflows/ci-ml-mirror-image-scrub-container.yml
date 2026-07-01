@@ -92,9 +92,8 @@ jobs:
               with:
                   context: .
                   buildx-fallback: false
-                  # TODO(infra): swap in the dedicated Depot project ID for this image before merge.
-                  # The build job stays red until this is set (draft PR — no deploy path runs yet).
-                  project: 'REPLACE_WITH_DEPOT_PROJECT_ID'
+                  # Depot project "replay-vision-ingestion-image-scrubber".
+                  project: 'hmrgpk84ch'
                   push: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' || vars.CD_DEPLOY_ENABLED == 'true' }}
                   file: Dockerfile.ml-mirror-image-scrub
                   tags: ${{ steps.docker-meta.outputs.tags }}
