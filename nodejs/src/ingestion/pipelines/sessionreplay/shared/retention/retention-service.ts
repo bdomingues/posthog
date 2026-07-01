@@ -1,5 +1,5 @@
 import { SessionBatchMetrics } from '~/ingestion/pipelines/sessionreplay/sessions/metrics'
-import { RetentionPeriod, ValidRetentionPeriods } from '~/ingestion/pipelines/sessionreplay/shared/constants'
+import { RetentionPeriod, isValidRetentionPeriod } from '~/ingestion/pipelines/sessionreplay/shared/constants'
 import { SessionMap, SessionSet } from '~/ingestion/pipelines/sessionreplay/shared/session-map'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { RedisPool, TeamId } from '~/types'
@@ -13,10 +13,6 @@ import { RetentionServiceMetrics } from './metrics'
  * wrapper can re-run the lookup.
  */
 export type RetentionResolution = { resolved: true; retentionPeriod: RetentionPeriod } | { resolved: false }
-
-function isValidRetentionPeriod(retentionPeriod: string): retentionPeriod is RetentionPeriod {
-    return ValidRetentionPeriods.includes(retentionPeriod as RetentionPeriod)
-}
 
 export class RetentionService {
     constructor(
