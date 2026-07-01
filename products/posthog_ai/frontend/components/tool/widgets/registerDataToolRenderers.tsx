@@ -16,18 +16,13 @@ import {
     IconWarning,
 } from '@posthog/icons'
 
-import {
-    registerToolRenderers,
-    type ToolRegistryEntry,
-    type ToolRendererProps,
-} from 'products/posthog_ai/frontend/api/tools'
+import { registerToolRenderers, type ToolRegistryEntry, type ToolRendererProps } from '../toolRegistry'
 
 // Product-specific tool-call renderers for the PostHog AI agent run surface. These render PostHog
-// product entities (insights, dashboards, recordings, error-tracking issues, notebooks, query results)
-// and therefore live in scenes/max — the shared `toolRegistry` must not import them. Importing
-// this module (done once by the Max scene, see Thread.tsx) registers them into the shared registry so
-// they're resolved when a sandbox conversation renders the matching tool call. Surfaces that never load
-// Max (tasks, signals inbox) simply fall through to the generic MCP card for these keys.
+// product entities (insights, dashboards, recordings, error-tracking issues, notebooks, query results).
+// They aren't registered by the shared `toolRegistry` module itself (which stays product-free); instead
+// this surface self-registers them via the side-effect import in `ToolCallCard`, so every consumer —
+// the /tasks runner, the signals inbox, and Max's sandbox path — resolves the widget for these keys.
 //
 // Renderers are code-split: each lazy() pulls its chunk on first use, not at registration time.
 const InsightRenderer = lazy(() => import('./CreateInsightWidget').then((m) => ({ default: m.CreateInsightWidget })))
@@ -45,8 +40,7 @@ const QueryRenderer = lazy(() => import('./QueryWidget').then((m) => ({ default:
 
 // The single-exec inner tool names exist in two conventions — hyphenated (the MCP yaml definitions) and
 // snake_case (legacy Max tools) — so we register both aliases where both are real tool names. Each call
-// fans the aliases into one entry per key and feeds them through the surface's `registerToolRenderers`
-// seam (Tier 4) — Max is the first consumer of that generic per-product mechanism.
+// fans the aliases into one entry per key and feeds them through the `registerToolRenderers` seam (Tier 4).
 function register(
     keys: string[],
     displayName: string,
