@@ -10,6 +10,7 @@ import {
 } from '~/ingestion/pipelines/sessionreplay/shared/features/session-feature-store'
 import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
 import { SessionMetadataSink } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-metadata-store'
+import { SessionMap } from '~/ingestion/pipelines/sessionreplay/shared/session-map'
 import { KeyStore, RecordingEncryptor, SessionKey } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { MessageWithTeam } from '~/ingestion/pipelines/sessionreplay/teams/types'
 
@@ -23,7 +24,7 @@ import { SessionRateLimiter } from './session-rate-limiter'
 import { SessionTracker } from './session-tracker'
 import { SnappySessionRecorder } from './snappy-session-recorder'
 
-/** Per-session recording state held in the batch, keyed by `teamId$sessionId`. */
+/** Per-session recording state held in the batch, keyed by `(teamId, sessionId)`. */
 interface SessionBatchEntry {
     sessionBlockRecorder: SnappySessionRecorder
     consoleLogRecorder: SessionConsoleLogRecorder
@@ -76,7 +77,7 @@ interface SessionBatchEntry {
  * as only the relevant session block needs to be retrieved and decompressed.
  */
 export class SessionBatchRecorder {
-    private readonly partitionSessions = new Map<number, Map<string, SessionBatchEntry>>()
+    private readonly partitionSessions = new Map<number, SessionMap<SessionBatchEntry>>()
     private readonly partitionSizes = new Map<number, number>()
     private _size: number = 0
     private readonly batchId: string
@@ -161,8 +162,8 @@ export class SessionBatchRecorder {
             }
 
             const sessions = this.partitionSessions.get(partition)!
-            if (sessions.has(teamSessionKey)) {
-                sessions.delete(teamSessionKey)
+            if (sessions.has(teamId, sessionId)) {
+                sessions.delete(teamId, sessionId)
                 logger.info('🔁', 'session_batch_recorder_deleted_rate_limited_session', {
                     partition,
                     sessionId,
@@ -175,12 +176,12 @@ export class SessionBatchRecorder {
         }
 
         if (!this.partitionSessions.has(partition)) {
-            this.partitionSessions.set(partition, new Map())
+            this.partitionSessions.set(partition, new SessionMap())
             this.partitionSizes.set(partition, 0)
         }
 
         const sessions = this.partitionSessions.get(partition)!
-        const existingBatchState = sessions.get(teamSessionKey)
+        const existingBatchState = sessions.get(teamId, sessionId)
 
         if (existingBatchState) {
             const { sessionBlockRecorder, sessionKey: existingSessionKey } = existingBatchState
@@ -203,7 +204,7 @@ export class SessionBatchRecorder {
                 return this.ignoreMessage(message)
             }
         } else {
-            sessions.set(teamSessionKey, {
+            sessions.set(teamId, sessionId, {
                 sessionBlockRecorder: new SnappySessionRecorder(sessionId, teamId, this.batchId),
                 consoleLogRecorder: new SessionConsoleLogRecorder(
                     sessionId,
@@ -222,7 +223,7 @@ export class SessionBatchRecorder {
             })
         }
 
-        const { sessionBlockRecorder, consoleLogRecorder, featureRecorder } = sessions.get(teamSessionKey)!
+        const { sessionBlockRecorder, consoleLogRecorder, featureRecorder } = sessions.get(teamId, sessionId)!
         const bytesWritten = sessionBlockRecorder.recordMessage(message.message)
         await consoleLogRecorder.recordMessage(message)
         try {
@@ -251,9 +252,8 @@ export class SessionBatchRecorder {
      * batch already placed here.
      */
     public getRetention(teamId: number, sessionId: string): RetentionPeriod | undefined {
-        const teamSessionKey = `${teamId}$${sessionId}`
         for (const sessions of this.partitionSessions.values()) {
-            const entry = sessions.get(teamSessionKey)
+            const entry = sessions.get(teamId, sessionId)
             if (entry) {
                 return entry.retentionPeriod
             }

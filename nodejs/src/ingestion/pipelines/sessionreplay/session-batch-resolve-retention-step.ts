@@ -3,6 +3,7 @@ import { BatchProcessingStep } from '~/ingestion/framework/base-batch-pipeline'
 import { drop, ok } from '~/ingestion/framework/results'
 import { RetentionPeriod } from '~/ingestion/pipelines/sessionreplay/shared/constants'
 import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
+import { SessionSet } from '~/ingestion/pipelines/sessionreplay/shared/session-map'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 
 import { SessionBatchMetrics } from './sessions/metrics'
@@ -28,23 +29,22 @@ export function createResolveRetentionStep<T extends { team: TeamForReplay; head
     return async function resolveRetentionStep(values) {
         const batch = sessionBatchManager.getCurrentBatch()
         // Reuse retention already resolved for sessions still in the current batch; resolve the rest.
+        // Collecting into a SessionSet dedupes repeated sessions so each is looked up only once.
         const batchRetentions = values.map((value) => batch.getRetention(value.team.teamId, value.headers.session_id))
-        const toResolve = values.flatMap((value, index) =>
-            batchRetentions[index] === undefined
-                ? [{ teamId: value.team.teamId, sessionId: value.headers.session_id, index }]
-                : []
-        )
-        const resolutions = await retentionService.resolveSessionRetentions(
-            toResolve.map(({ teamId, sessionId }) => ({ teamId, sessionId }))
-        )
-        const resolutionByIndex = new Map(toResolve.map(({ index }, i) => [index, resolutions[i]]))
+        const toResolve = new SessionSet()
+        values.forEach((value, index) => {
+            if (batchRetentions[index] === undefined) {
+                toResolve.add(value.team.teamId, value.headers.session_id)
+            }
+        })
+        const resolutions = await retentionService.resolveSessionRetentions(toResolve)
 
         return values.map((value, index) => {
             const cached = batchRetentions[index]
             if (cached !== undefined) {
                 return ok({ ...value, retentionPeriod: cached })
             }
-            const resolution = resolutionByIndex.get(index)!
+            const resolution = resolutions.get(value.team.teamId, value.headers.session_id)!
             if (resolution.resolved) {
                 return ok({ ...value, retentionPeriod: resolution.retentionPeriod })
             }

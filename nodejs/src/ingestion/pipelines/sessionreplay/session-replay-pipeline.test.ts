@@ -11,7 +11,11 @@ import { TopHogRegistry } from '~/ingestion/framework/extensions/tophog'
 import { drop, ok, redirect } from '~/ingestion/framework/results'
 import { SessionBatchManager } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-manager'
 import { SessionBatchRecorder } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
-import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
+import {
+    RetentionResolution,
+    RetentionService,
+} from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
+import { SessionMap, SessionSet } from '~/ingestion/pipelines/sessionreplay/shared/session-map'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { createMockIngestionOutputs } from '~/tests/helpers/mock-ingestion-outputs'
@@ -92,11 +96,13 @@ describe('session-replay-pipeline', () => {
 
     // Resolves every session to 30d so messages flow through to recording.
     const retentionService = {
-        resolveSessionRetentions: jest
-            .fn()
-            .mockImplementation((sessions: { teamId: number; sessionId: string }[]) =>
-                Promise.resolve(sessions.map(() => ({ resolved: true, retentionPeriod: '30d' })))
-            ),
+        resolveSessionRetentions: jest.fn().mockImplementation((sessions: SessionSet) => {
+            const resolutions = new SessionMap<RetentionResolution>()
+            for (const s of sessions) {
+                resolutions.set(s.teamId, s.sessionId, { resolved: true, retentionPeriod: '30d' })
+            }
+            return Promise.resolve(resolutions)
+        }),
     } as unknown as RetentionService
 
     const defaultTeam: TeamForReplay = {

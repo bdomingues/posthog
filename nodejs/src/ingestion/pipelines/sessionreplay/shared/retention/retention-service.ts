@@ -1,5 +1,6 @@
 import { SessionBatchMetrics } from '~/ingestion/pipelines/sessionreplay/sessions/metrics'
 import { RetentionPeriod, ValidRetentionPeriods } from '~/ingestion/pipelines/sessionreplay/shared/constants'
+import { SessionMap, SessionSet } from '~/ingestion/pipelines/sessionreplay/shared/session-map'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { RedisPool, TeamId } from '~/types'
 
@@ -29,37 +30,37 @@ export class RetentionService {
     }
 
     /**
-     * Resolves retention for a whole batch of sessions in one Redis round trip (MGET), falling back
-     * to Postgres for cache misses — deduped to one lookup per distinct team — and writing the
-     * resolved values back to Redis in a single pipeline. Results are returned aligned with the
-     * input order. Permanent failures come back as `{ resolved: false }`; a transient Redis or
+     * Resolves retention for a set of sessions (already deduped by `(teamId, sessionId)`). Cache hits
+     * come from one Redis MGET; misses fall back to Postgres — one lookup per distinct team — and are
+     * written back to Redis in a single pipeline. Returns a {@link SessionMap} keyed by
+     * `(teamId, sessionId)`. Permanent failures map to `{ resolved: false }`; a transient Redis or
      * Postgres failure throws so the caller's retry wrapper can re-run the whole lookup.
      */
-    public async resolveSessionRetentions(
-        sessions: { teamId: TeamId; sessionId: string }[]
-    ): Promise<RetentionResolution[]> {
-        if (sessions.length === 0) {
-            return []
+    public async resolveSessionRetentions(sessions: SessionSet): Promise<SessionMap<RetentionResolution>> {
+        const resolutions = new SessionMap<RetentionResolution>()
+        if (sessions.size === 0) {
+            return resolutions
         }
+
+        const unique = [...sessions]
 
         const startTime = performance.now()
         const client = await this.redisPool.acquire()
         try {
-            const redisKeys = sessions.map(({ sessionId }) => this.generateRedisKey(sessionId))
+            const redisKeys = unique.map(({ sessionId }) => this.generateRedisKey(sessionId))
             const cached = await client.mget(redisKeys)
 
-            const resolutions = new Array<RetentionResolution>(sessions.length)
             const missIndexes: number[] = []
-
-            for (let i = 0; i < sessions.length; i++) {
+            for (let i = 0; i < unique.length; i++) {
+                const { teamId, sessionId } = unique[i]
                 const value = cached[i]
                 if (value === null) {
                     missIndexes.push(i)
                 } else if (isValidRetentionPeriod(value)) {
-                    resolutions[i] = { resolved: true, retentionPeriod: value }
+                    resolutions.set(teamId, sessionId, { resolved: true, retentionPeriod: value })
                 } else {
                     RetentionServiceMetrics.incrementLookupErrors()
-                    resolutions[i] = { resolved: false }
+                    resolutions.set(teamId, sessionId, { resolved: false })
                 }
             }
 
@@ -67,7 +68,7 @@ export class RetentionService {
                 // One Postgres lookup per distinct team, resolved concurrently, not per session.
                 const teamRetentions = new Map<TeamId, RetentionPeriod | null>()
                 await Promise.all(
-                    [...new Set(missIndexes.map((i) => sessions[i].teamId))].map(async (teamId) => {
+                    [...new Set(missIndexes.map((i) => unique[i].teamId))].map(async (teamId) => {
                         teamRetentions.set(teamId, await this.teamService.getRetentionPeriodByTeamId(teamId))
                     })
                 )
@@ -75,12 +76,13 @@ export class RetentionService {
                 const writeBack = client.pipeline()
                 let hasWriteBack = false
                 for (const i of missIndexes) {
-                    const retentionPeriod = teamRetentions.get(sessions[i].teamId) ?? null
+                    const { teamId, sessionId } = unique[i]
+                    const retentionPeriod = teamRetentions.get(teamId) ?? null
                     if (retentionPeriod === null) {
                         RetentionServiceMetrics.incrementLookupErrors()
-                        resolutions[i] = { resolved: false }
+                        resolutions.set(teamId, sessionId, { resolved: false })
                     } else {
-                        resolutions[i] = { resolved: true, retentionPeriod }
+                        resolutions.set(teamId, sessionId, { resolved: true, retentionPeriod })
                         // Cache for future batches, with a TTL of 24 hours.
                         writeBack.set(redisKeys[i], retentionPeriod, 'EX', 24 * 60 * 60)
                         hasWriteBack = true

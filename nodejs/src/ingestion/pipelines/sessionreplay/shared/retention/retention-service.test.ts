@@ -1,10 +1,17 @@
 import { Redis } from 'ioredis'
 
+import { SessionSet } from '~/ingestion/pipelines/sessionreplay/shared/session-map'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { RedisPool, TeamId } from '~/types'
 
 import { RetentionServiceMetrics } from './metrics'
 import { RetentionService } from './retention-service'
+
+const sessionSet = (...pairs: [number, string][]): SessionSet => {
+    const set = new SessionSet()
+    pairs.forEach(([teamId, sessionId]) => set.add(teamId, sessionId))
+    return set
+}
 
 jest.mock('./metrics', () => ({
     RetentionServiceMetrics: {
@@ -57,24 +64,19 @@ describe('RetentionService', () => {
     })
 
     describe('resolveSessionRetentions', () => {
-        it('returns [] without touching Redis for an empty batch', async () => {
-            const results = await retentionService.resolveSessionRetentions([])
-            expect(results).toEqual([])
+        it('returns an empty map without touching Redis for an empty set', async () => {
+            const results = await retentionService.resolveSessionRetentions(sessionSet())
+            expect(results.size).toBe(0)
             expect(mockRedisClient.mget).not.toHaveBeenCalled()
         })
 
         it('resolves cached hits in one MGET without hitting Postgres', async () => {
             mockRedisClient.mget = jest.fn().mockResolvedValue(['30d', '1y'])
 
-            const results = await retentionService.resolveSessionRetentions([
-                { teamId: 1, sessionId: 'a' },
-                { teamId: 2, sessionId: 'b' },
-            ])
+            const results = await retentionService.resolveSessionRetentions(sessionSet([1, 'a'], [2, 'b']))
 
-            expect(results).toEqual([
-                { resolved: true, retentionPeriod: '30d' },
-                { resolved: true, retentionPeriod: '1y' },
-            ])
+            expect(results.get(1, 'a')).toEqual({ resolved: true, retentionPeriod: '30d' })
+            expect(results.get(2, 'b')).toEqual({ resolved: true, retentionPeriod: '1y' })
             expect(mockRedisClient.mget).toHaveBeenCalledTimes(1)
             expect(mockRedisClient.mget).toHaveBeenCalledWith([
                 '@posthog/replay/session-retention-a',
@@ -88,17 +90,11 @@ describe('RetentionService', () => {
             // sessions a and b share team 1 (→ 30d); session c is team 2 (→ 1y).
             mockRedisClient.mget = jest.fn().mockResolvedValue([null, null, null])
 
-            const results = await retentionService.resolveSessionRetentions([
-                { teamId: 1, sessionId: 'a' },
-                { teamId: 1, sessionId: 'b' },
-                { teamId: 2, sessionId: 'c' },
-            ])
+            const results = await retentionService.resolveSessionRetentions(sessionSet([1, 'a'], [1, 'b'], [2, 'c']))
 
-            expect(results).toEqual([
-                { resolved: true, retentionPeriod: '30d' },
-                { resolved: true, retentionPeriod: '30d' },
-                { resolved: true, retentionPeriod: '1y' },
-            ])
+            expect(results.get(1, 'a')).toEqual({ resolved: true, retentionPeriod: '30d' })
+            expect(results.get(1, 'b')).toEqual({ resolved: true, retentionPeriod: '30d' })
+            expect(results.get(2, 'c')).toEqual({ resolved: true, retentionPeriod: '1y' })
             // Three misses across two distinct teams → one Postgres lookup per team.
             expect(mockTeamService.getRetentionPeriodByTeamId).toHaveBeenCalledTimes(2)
             expect(mockTeamService.getRetentionPeriodByTeamId).toHaveBeenCalledWith(1)
@@ -123,9 +119,9 @@ describe('RetentionService', () => {
         it('marks a session unresolvable (not thrown) when its team has no retention', async () => {
             mockRedisClient.mget = jest.fn().mockResolvedValue([null])
 
-            const results = await retentionService.resolveSessionRetentions([{ teamId: 3, sessionId: 'gone' }])
+            const results = await retentionService.resolveSessionRetentions(sessionSet([3, 'gone']))
 
-            expect(results).toEqual([{ resolved: false }])
+            expect(results.get(3, 'gone')).toEqual({ resolved: false })
             expect(mockPipeline.set).not.toHaveBeenCalled()
             expect(RetentionServiceMetrics.incrementLookupErrors).toHaveBeenCalledTimes(1)
         })
@@ -133,25 +129,20 @@ describe('RetentionService', () => {
         it('marks a session unresolvable when the cached value is invalid', async () => {
             mockRedisClient.mget = jest.fn().mockResolvedValue(['foobar'])
 
-            const results = await retentionService.resolveSessionRetentions([{ teamId: 1, sessionId: 'a' }])
+            const results = await retentionService.resolveSessionRetentions(sessionSet([1, 'a']))
 
-            expect(results).toEqual([{ resolved: false }])
+            expect(results.get(1, 'a')).toEqual({ resolved: false })
             expect(mockTeamService.getRetentionPeriodByTeamId).not.toHaveBeenCalled()
             expect(RetentionServiceMetrics.incrementLookupErrors).toHaveBeenCalledTimes(1)
         })
 
-        it('keeps results aligned with input order for a mix of hits and misses', async () => {
+        it('keys each result by (teamId, sessionId) for a mix of hits and misses', async () => {
             mockRedisClient.mget = jest.fn().mockResolvedValue(['1y', null])
 
-            const results = await retentionService.resolveSessionRetentions([
-                { teamId: 2, sessionId: 'cached' },
-                { teamId: 1, sessionId: 'miss' },
-            ])
+            const results = await retentionService.resolveSessionRetentions(sessionSet([2, 'cached'], [1, 'miss']))
 
-            expect(results).toEqual([
-                { resolved: true, retentionPeriod: '1y' },
-                { resolved: true, retentionPeriod: '30d' },
-            ])
+            expect(results.get(2, 'cached')).toEqual({ resolved: true, retentionPeriod: '1y' })
+            expect(results.get(1, 'miss')).toEqual({ resolved: true, retentionPeriod: '30d' })
         })
     })
 })

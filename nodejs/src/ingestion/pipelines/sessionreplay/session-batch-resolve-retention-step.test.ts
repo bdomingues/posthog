@@ -1,5 +1,9 @@
 import { PipelineResultType, isOkResult } from '~/ingestion/framework/results'
-import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
+import {
+    RetentionResolution,
+    RetentionService,
+} from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
+import { SessionMap } from '~/ingestion/pipelines/sessionreplay/shared/session-map'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 
 import { createResolveRetentionStep } from './session-batch-resolve-retention-step'
@@ -28,10 +32,13 @@ describe('createResolveRetentionStep', () => {
     const createStep = () =>
         createResolveRetentionStep(mockRetentionService, mockSessionBatchManager as unknown as SessionBatchManager)
 
+    // The (deduped) sessions the step handed to the service on its single call.
+    const resolvedSessions = () => [...mockRetentionService.resolveSessionRetentions.mock.calls[0][0]]
+
     beforeEach(() => {
         jest.clearAllMocks()
         mockRetentionService = {
-            resolveSessionRetentions: jest.fn().mockResolvedValue([]),
+            resolveSessionRetentions: jest.fn().mockResolvedValue(new SessionMap<RetentionResolution>()),
         } as unknown as jest.Mocked<RetentionService>
         // Default: no session is already in the batch, so everything is resolved via the service.
         mockBatch = { getRetention: jest.fn().mockReturnValue(undefined) } as unknown as jest.Mocked<
@@ -43,15 +50,16 @@ describe('createResolveRetentionStep', () => {
     })
 
     it('resolves the batch in one call (keyed on the session_id header) and attaches retention', async () => {
-        mockRetentionService.resolveSessionRetentions.mockResolvedValue([
-            { resolved: true, retentionPeriod: '30d' },
-            { resolved: true, retentionPeriod: '1y' },
-        ])
+        mockRetentionService.resolveSessionRetentions.mockResolvedValue(
+            new SessionMap<RetentionResolution>()
+                .set(1, 'a', { resolved: true, retentionPeriod: '30d' })
+                .set(2, 'b', { resolved: true, retentionPeriod: '1y' })
+        )
         const step = createStep()
 
         const results = await step([element(1, 'a'), element(2, 'b')])
 
-        expect(mockRetentionService.resolveSessionRetentions).toHaveBeenCalledWith([
+        expect(resolvedSessions()).toEqual([
             { teamId: 1, sessionId: 'a' },
             { teamId: 2, sessionId: 'b' },
         ])
@@ -59,16 +67,31 @@ describe('createResolveRetentionStep', () => {
         expect(SessionBatchMetrics.incrementSessionsDroppedMissingRetention).not.toHaveBeenCalled()
     })
 
+    it('collapses a repeated session into a single resolve, fanned back out to every message', async () => {
+        mockRetentionService.resolveSessionRetentions.mockResolvedValue(
+            new SessionMap<RetentionResolution>().set(1, 'a', { resolved: true, retentionPeriod: '30d' })
+        )
+        const step = createStep()
+
+        const results = await step([element(1, 'a'), element(1, 'a'), element(1, 'a')])
+
+        // The three copies dedupe to one session before the service is asked.
+        expect(resolvedSessions()).toEqual([{ teamId: 1, sessionId: 'a' }])
+        expect(results.map((r) => (isOkResult(r) ? r.value.retentionPeriod : null))).toEqual(['30d', '30d', '30d'])
+    })
+
     it('reuses retention already held in the batch and only resolves the unseen sessions', async () => {
         // Session 'a' (team 1) is already in the batch; 'b' (team 2) is not.
         mockBatch.getRetention.mockImplementation((teamId: number) => (teamId === 1 ? '90d' : undefined))
-        mockRetentionService.resolveSessionRetentions.mockResolvedValue([{ resolved: true, retentionPeriod: '1y' }])
+        mockRetentionService.resolveSessionRetentions.mockResolvedValue(
+            new SessionMap<RetentionResolution>().set(2, 'b', { resolved: true, retentionPeriod: '1y' })
+        )
         const step = createStep()
 
         const results = await step([element(1, 'a'), element(2, 'b')])
 
         // Only the unseen session is sent to the service.
-        expect(mockRetentionService.resolveSessionRetentions).toHaveBeenCalledWith([{ teamId: 2, sessionId: 'b' }])
+        expect(resolvedSessions()).toEqual([{ teamId: 2, sessionId: 'b' }])
         expect(results.map((r) => (isOkResult(r) ? r.value.retentionPeriod : null))).toEqual(['90d', '1y'])
     })
 
@@ -78,15 +101,16 @@ describe('createResolveRetentionStep', () => {
 
         const results = await step([element(1, 'a'), element(2, 'b')])
 
-        expect(mockRetentionService.resolveSessionRetentions).toHaveBeenCalledWith([])
+        expect(resolvedSessions()).toEqual([])
         expect(results.map((r) => (isOkResult(r) ? r.value.retentionPeriod : null))).toEqual(['30d', '30d'])
     })
 
     it('drops an unresolvable session and keeps the rest', async () => {
-        mockRetentionService.resolveSessionRetentions.mockResolvedValue([
-            { resolved: false },
-            { resolved: true, retentionPeriod: '90d' },
-        ])
+        mockRetentionService.resolveSessionRetentions.mockResolvedValue(
+            new SessionMap<RetentionResolution>()
+                .set(999, 'gone', { resolved: false })
+                .set(2, 'ok', { resolved: true, retentionPeriod: '90d' })
+        )
         const step = createStep()
 
         const results = await step([element(999, 'gone'), element(2, 'ok')])
