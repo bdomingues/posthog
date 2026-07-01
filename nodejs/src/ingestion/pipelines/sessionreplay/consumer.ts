@@ -278,16 +278,13 @@ export class SessionRecordingIngester {
     }
 
     /**
-     * Drains the accumulating pipeline to completion, committing offsets after each flush. A flushed
-     * result means the batch is durably in storage, so the offsets it covers are safe to commit.
+     * Drains the accumulating pipeline to completion. Flushing — writing to storage, committing
+     * offsets, and recording flush metrics — is handled by the flush pipeline's steps, so the
+     * consumer just pumps next() until the pipeline is empty.
      */
     private async drainAccumulatingPipeline(): Promise<void> {
-        let result = await this.accumulatingPipeline.next()
-        while (result !== null) {
-            if (result.flushed) {
-                await instrumentFn(`recordingingesterv2.handleEachBatch.flush`, async () => this.offsetManager.commit())
-            }
-            result = await this.accumulatingPipeline.next()
+        while ((await this.accumulatingPipeline.next()) !== null) {
+            // flush lifecycle runs inside the pipeline; nothing to do per result here
         }
     }
 
@@ -317,6 +314,7 @@ export class SessionRecordingIngester {
             recordPipeline: this.recordPipeline,
             sessionBatchFactory: this.sessionBatchFactory,
             retentionService: this.retentionService,
+            offsetManager: this.offsetManager,
             maxBatchSizeBytes: this.maxBatchSizeBytes,
             maxBatchAgeMs: this.maxBatchAgeMs,
         })
@@ -372,11 +370,9 @@ export class SessionRecordingIngester {
 
         await this.kafkaConsumer.disconnect()
 
-        // Final flush: stop the age timer and persist the last partial batch, then commit its offsets.
-        const flushed = await this.accumulatingPipeline.stop()
-        if (flushed?.flushed) {
-            await this.offsetManager.commit()
-        }
+        // Final flush: stop the age timer and persist the last partial batch. The flush pipeline's
+        // steps commit its offsets and record metrics.
+        await this.accumulatingPipeline.stop()
 
         const promiseResults = await this.promiseScheduler.waitForAllSettled()
 
@@ -417,10 +413,9 @@ export class SessionRecordingIngester {
         }
 
         SessionRecordingIngesterMetrics.resetSessionsHandled()
-        const flushed = await this.accumulatingPipeline.flush()
-        if (flushed?.flushed) {
-            await this.offsetManager.commit()
-        }
+        // Process whatever is buffered and flush it; the flush pipeline commits the offsets it covers,
+        // so the new owner resumes from after the work we already persisted.
+        await this.accumulatingPipeline.flush()
     }
 
     private async commitOffsets(offsets: TopicPartitionOffset[]): Promise<void> {

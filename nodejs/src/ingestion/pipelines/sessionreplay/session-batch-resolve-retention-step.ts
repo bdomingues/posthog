@@ -9,7 +9,7 @@ import {
 } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 
 import { SessionBatchMetrics } from './sessions/metrics'
-import { SessionBatchContext } from './sessions/session-batch-factory'
+import { SessionBatchContext } from './sessions/session-batch-recorder'
 
 export type RetentionByKey = Map<string, RetentionPeriod>
 

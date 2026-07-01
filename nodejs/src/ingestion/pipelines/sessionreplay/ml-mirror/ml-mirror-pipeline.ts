@@ -18,7 +18,7 @@ import { createAnonymizeStep } from '~/ingestion/pipelines/sessionreplay/anonymi
 import { ScrubContext } from '~/ingestion/pipelines/sessionreplay/anonymize/config'
 import { createParseMessageStep } from '~/ingestion/pipelines/sessionreplay/parse-message-step'
 import { createRecordSessionEventStep } from '~/ingestion/pipelines/sessionreplay/record-session-event-step'
-import { SessionBatchContext } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-factory'
+import { SessionBatchContext } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
 import { createTeamFilterStep } from '~/ingestion/pipelines/sessionreplay/team-filter-step'
 
 export type MlMirrorReplayPipelineConfig = SessionReplayPipelineConfig & {

@@ -9,14 +9,6 @@ import { SessionConsoleLogStore } from './session-console-log-store'
 import { SessionFilter } from './session-filter'
 import { SessionTracker } from './session-tracker'
 
-/**
- * Batch context attached to every element of an accumulation cycle and to the flush units.
- * Carries the recorder that the record step folds into and that the flush step drains.
- */
-export interface SessionBatchContext {
-    sessionBatchRecorder: SessionBatchRecorder
-}
-
 export interface SessionBatchFactoryConfig {
     /** Maximum number of events per session per batch before rate limiting */
     maxEventsPerSessionPerBatch: number

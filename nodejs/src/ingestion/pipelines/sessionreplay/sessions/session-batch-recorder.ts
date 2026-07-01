@@ -14,7 +14,6 @@ import { KeyStore, RecordingEncryptor, SessionKey } from '~/ingestion/pipelines/
 import { MessageWithTeam } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { TeamId } from '~/types'
 
-import { SessionBatchMetrics } from './metrics'
 import { SessionBatchFileStorage } from './session-batch-file-storage'
 import { SessionConsoleLogRecorder } from './session-console-log-recorder'
 import { SessionConsoleLogStore } from './session-console-log-store'
@@ -67,6 +66,15 @@ import { SnappySessionRecorder } from './snappy-session-recorder'
  * This format allows efficient access to individual session recordings within a batch,
  * as only the relevant session block needs to be retrieved and decompressed.
  */
+
+/**
+ * Batch context attached to every element of an accumulation cycle and to the flush units.
+ * Carries the recorder that the record step folds into and that the flush step drains.
+ */
+export interface SessionBatchContext {
+    sessionBatchRecorder: SessionBatchRecorder
+}
+
 export class SessionBatchRecorder {
     private readonly partitionSessions = new Map<
         number,
@@ -290,22 +298,11 @@ export class SessionBatchRecorder {
     }
 
     /**
-     * Flushes the session recordings to storage and commits Kafka offsets.
+     * Writes the session recordings to storage and stores metadata. Offsets are committed and flush
+     * metrics recorded by later flush-pipeline steps, not here — the recorder owns the storage write,
+     * not the Kafka offset lifecycle.
      *
      * @param retentionByKey - Retention period per `${teamId}$${sessionId}`, resolved upstream.
-     * @throws If the flush operation fails
-     */
-    public async flush(retentionByKey: Map<string, RetentionPeriod>): Promise<SessionBlockMetadata[]> {
-        const blockMetadata = await this.flushToStorage(retentionByKey)
-        await this.offsetManager.commit()
-        return blockMetadata
-    }
-
-    /**
-     * Writes the session recordings to storage and stores metadata, WITHOUT committing
-     * Kafka offsets. The caller commits offsets after a successful flush — keeping offset
-     * management outside the storage write path.
-     *
      * @throws If the flush operation fails
      */
     public async flushToStorage(retentionByKey: Map<string, RetentionPeriod>): Promise<SessionBlockMetadata[]> {
@@ -430,11 +427,8 @@ export class SessionBatchRecorder {
             await this.featureStore.storeSessionFeatures(featureBlocks)
             await this.metadataStore.storeSessionBlocks(blockMetadata)
 
-            // Update metrics
-            SessionBatchMetrics.incrementBatchesFlushed()
-            SessionBatchMetrics.incrementSessionsFlushed(totalSessions)
-            SessionBatchMetrics.incrementEventsFlushed(totalEvents)
-            SessionBatchMetrics.incrementBytesWritten(totalBytes)
+            // Flush counters are recorded by the caller after it commits offsets (see recordFlushedBatch),
+            // so a failed commit doesn't count a batch that will be reprocessed.
 
             // Clear sessions, partition sizes, total size, and rate limiter state after successful flush
             this.partitionSessions.clear()

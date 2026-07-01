@@ -49,7 +49,7 @@ function flushRecorder(recorder: SessionBatchRecorder) {
     const retentionByKey = new Map<string, RetentionPeriod>(
         recorder.getPendingSessions().map(({ teamId, sessionId }) => [`${teamId}$${sessionId}`, '30d'])
     )
-    return recorder.flush(retentionByKey)
+    return recorder.flushToStorage(retentionByKey)
 }
 
 jest.mock('~/ingestion/pipelines/sessionreplay/sessions/session-feature-recorder', () => ({
@@ -296,7 +296,6 @@ describe('session recording integration', () => {
 
         // Verify the batch was properly finalized
         expect(mockWriter.finish).toHaveBeenCalled()
-        expect(mockOffsetManager.commit).toHaveBeenCalled()
         expect(mockMetadataStore.storeSessionBlocks).toHaveBeenCalledWith(metadata)
     })
 })

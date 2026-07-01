@@ -3,7 +3,7 @@ import { ok } from '~/ingestion/framework/results'
 import { ProcessingStep } from '~/ingestion/framework/steps'
 import { ParsedMessageData } from '~/ingestion/pipelines/sessionreplay/kafka/types'
 import { SessionRecordingIngesterMetrics } from '~/ingestion/pipelines/sessionreplay/metrics'
-import { SessionBatchContext } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-factory'
+import { SessionBatchContext } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
 import { MessageWithTeam, TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { ValueMatcher } from '~/types'
 

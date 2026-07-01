@@ -10,11 +10,10 @@ import { BatchPipeline } from '~/ingestion/framework/batch-pipeline.interface'
 import { newAccumulatingPipeline, newBatchPipelineBuilder } from '~/ingestion/framework/builders'
 import { TopHogRegistry, createTopHogWrapper, sum, timer } from '~/ingestion/framework/extensions/tophog'
 import { PipelineConfig } from '~/ingestion/framework/result-handling-pipeline'
+import { KafkaOffsetManager } from '~/ingestion/pipelines/sessionreplay/kafka/offset-manager'
 import { ParsedMessageData } from '~/ingestion/pipelines/sessionreplay/kafka/types'
-import {
-    SessionBatchContext,
-    SessionBatchFactory,
-} from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-factory'
+import { SessionBatchFactory } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-factory'
+import { SessionBatchContext } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
 import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
 import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
@@ -24,6 +23,8 @@ import { ValueMatcher } from '~/types'
 import { createLibVersionMonitorStep } from './lib-version-monitor-step'
 import { createParseMessageStep } from './parse-message-step'
 import { createRecordSessionEventStep } from './record-session-event-step'
+import { createCommitOffsetsStep } from './session-batch-commit-offsets-step'
+import { createRecordMetricsStep } from './session-batch-record-metrics-step'
 import { createResolveRetentionStep } from './session-batch-resolve-retention-step'
 import { createSessionBatchStep } from './session-batch-step'
 import { createWriteStep } from './session-batch-write-step'
@@ -67,6 +68,8 @@ export interface SessionReplayAccumulatingPipelineConfig {
     sessionBatchFactory: SessionBatchFactory
     /** Resolves per-session retention off the S3 write path in the resolve-retention flush step */
     retentionService: RetentionService
+    /** Committed by the commit-offsets flush step after the write step persists the batch */
+    offsetManager: KafkaOffsetManager
     /** Maximum raw size (before compression) of a batch in bytes before it is flushed */
     maxBatchSizeBytes: number
     /** Maximum age of a batch in milliseconds before it is flushed */
@@ -203,7 +206,8 @@ export function createSessionReplayPipeline(config: SessionReplayPipelineConfig)
 export function createSessionReplayAccumulatingPipeline(
     config: SessionReplayAccumulatingPipelineConfig
 ): SessionReplayAccumulatingPipeline {
-    const { recordPipeline, sessionBatchFactory, retentionService, maxBatchSizeBytes, maxBatchAgeMs } = config
+    const { recordPipeline, sessionBatchFactory, retentionService, offsetManager, maxBatchSizeBytes, maxBatchAgeMs } =
+        config
 
     return newAccumulatingPipeline<
         SessionReplayPipelineInput,
@@ -217,6 +221,8 @@ export function createSessionReplayAccumulatingPipeline(
     >({
         beforeBatch: (builder) => builder.pipe(createSessionBatchStep(sessionBatchFactory)),
         pipeline: recordPipeline,
+        // The flush lifecycle: resolve retention (off the S3 path), write to storage, commit the
+        // offsets it covers, then record the flush metrics from the write step's block metadata.
         flush: (builder) =>
             builder.sequentially((b) =>
                 b
@@ -228,6 +234,8 @@ export function createSessionReplayAccumulatingPipeline(
                         name: 'session_replay_retention',
                     })
                     .pipe(createWriteStep())
+                    .pipe(createCommitOffsetsStep(offsetManager))
+                    .pipe(createRecordMetricsStep())
             ),
         shouldFlush: (batchContext) => batchContext.sessionBatchRecorder.size >= maxBatchSizeBytes,
         maxBatchAgeMs,

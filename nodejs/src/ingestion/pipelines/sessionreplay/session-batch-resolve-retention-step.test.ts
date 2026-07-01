@@ -7,8 +7,7 @@ import {
 
 import { createResolveRetentionStep } from './session-batch-resolve-retention-step'
 import { SessionBatchMetrics } from './sessions/metrics'
-import { SessionBatchContext } from './sessions/session-batch-factory'
-import { SessionBatchRecorder } from './sessions/session-batch-recorder'
+import { SessionBatchContext, SessionBatchRecorder } from './sessions/session-batch-recorder'
 
 jest.mock('~/common/utils/logger', () => ({ logger: { warn: jest.fn() } }))
 jest.mock('~/common/utils/posthog', () => ({ captureException: jest.fn() }))
