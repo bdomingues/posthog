@@ -15,7 +15,7 @@ import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/te
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { createMockIngestionOutputs } from '~/tests/helpers/mock-ingestion-outputs'
 
-import { SessionReplayPipelineOutput, createSessionReplayPipeline } from './session-replay-pipeline'
+import { SessionReplayPipelineOutput, createSessionReplayInnerPipeline } from './session-replay-pipeline'
 
 jest.mock('~/ingestion/common/steps/event-preprocessing', () => ({
     createParseHeadersStep: jest.fn(),
@@ -131,7 +131,7 @@ describe('session-replay-pipeline', () => {
     // Feeds messages through the record pipeline with the batch recorder tagged on each element
     // (as the accumulating pipeline does), drains it, and returns the unwrapped OK outputs.
     async function runPipeline(
-        pipeline: ReturnType<typeof createSessionReplayPipeline>,
+        pipeline: ReturnType<typeof createSessionReplayInnerPipeline>,
         messages: Message[]
     ): Promise<SessionReplayPipelineOutput[]> {
         pipeline.feed(
@@ -252,9 +252,9 @@ describe('session-replay-pipeline', () => {
         }
     }
 
-    describe('createSessionReplayPipeline', () => {
+    describe('createSessionReplayInnerPipeline', () => {
         it('passes through messages when no restrictions apply', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -285,7 +285,7 @@ describe('session-replay-pipeline', () => {
                 }
             )
 
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -309,7 +309,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('filters out messages that fail to parse', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -341,7 +341,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('sends messages that fail to parse to the DLQ topic', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -389,7 +389,7 @@ describe('session-replay-pipeline', () => {
                 }
             )
 
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -419,7 +419,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('returns empty array for empty input', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -445,7 +445,7 @@ describe('session-replay-pipeline', () => {
                 }
             )
 
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -488,7 +488,7 @@ describe('session-replay-pipeline', () => {
                 }
             )
 
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -517,7 +517,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('processes large batch with all messages passing through', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -554,7 +554,7 @@ describe('session-replay-pipeline', () => {
                 getRetentionPeriodByTeamId: jest.fn().mockResolvedValue(30),
             } as unknown as TeamService
 
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -578,7 +578,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('sends messages with no token header to DLQ', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -598,7 +598,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('sends ingestion warning for old lib version', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -634,7 +634,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('does not send ingestion warning for new lib version', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -653,7 +653,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('does not send ingestion warning when no lib version header', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -672,7 +672,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('sends ingestion warning when message timestamps are too old', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -706,7 +706,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('records messages to session batch', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -733,7 +733,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('records multiple messages to session batch', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -759,7 +759,7 @@ describe('session-replay-pipeline', () => {
             // Drop every message via restrictions
             mockCreateApplyEventRestrictionsStep.mockReturnValue(() => Promise.resolve(drop('dropped by restriction')))
 
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -783,7 +783,7 @@ describe('session-replay-pipeline', () => {
                 getTeamByToken: jest.fn().mockResolvedValue(null),
             } as unknown as TeamService
 
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -803,7 +803,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('records parse time metric via TopHog', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -828,7 +828,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('records message size metric via TopHog', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -853,7 +853,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('records consume time metric via TopHog', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -878,7 +878,7 @@ describe('session-replay-pipeline', () => {
         })
 
         it('records TopHog metrics for multiple messages', async () => {
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -924,7 +924,7 @@ describe('session-replay-pipeline', () => {
         it('does not record TopHog metrics for dropped messages', async () => {
             mockCreateApplyEventRestrictionsStep.mockReturnValue(() => Promise.resolve(drop('dropped')))
 
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,
@@ -964,7 +964,7 @@ describe('session-replay-pipeline', () => {
                 }
             )
 
-            const pipeline = createSessionReplayPipeline({
+            const pipeline = createSessionReplayInnerPipeline({
                 outputs,
                 eventIngestionRestrictionManager: mockRestrictionManager,
                 overflowEnabled: true,

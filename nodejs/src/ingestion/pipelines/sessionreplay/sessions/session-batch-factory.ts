@@ -42,7 +42,7 @@ export interface SessionBatchFactoryConfig {
  * which keeps batch lifecycle entirely inside the accumulating pipeline and leaves room for it to
  * run concurrent batches later.
  *
- * How the pieces fit (see `createSessionReplayAccumulatingPipeline` in `session-replay-pipeline.ts`):
+ * How the pieces fit (see `createSessionReplayPipeline` in `session-replay-pipeline.ts`):
  *
  * ```
  * AccumulatingPipeline

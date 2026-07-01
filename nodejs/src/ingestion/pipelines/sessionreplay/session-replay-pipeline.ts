@@ -44,7 +44,7 @@ export interface SessionReplayPipelineOutput {
  * batch context (the recorder) tagged on by the accumulating pipeline, which the record step
  * folds events into.
  */
-export type SessionReplayRecordPipeline = BatchPipeline<
+export type SessionReplayInnerPipeline = BatchPipeline<
     SessionReplayPipelineInput & SessionBatchContext & AccumulationContext, // TInput: element in (raw input + batch recorder + batch id)
     SessionReplayPipelineOutput, // TOutput: element out of the record pipeline
     { message: Message }, // CInput: per-element context in (the Kafka message)
@@ -52,7 +52,7 @@ export type SessionReplayRecordPipeline = BatchPipeline<
     OverflowOutput // R: redirect output names this pipeline can emit
 >
 
-export type SessionReplayAccumulatingPipeline = AccumulatingPipeline<
+export type SessionReplayPipeline = AccumulatingPipeline<
     SessionReplayPipelineInput, // TRecordIn: element fed in per message (batch context is added internally)
     SessionReplayPipelineOutput, // TRecordOut: element out of the record pipeline
     { message: Message }, // CRecordIn: record-pipeline context in (the Kafka message)
@@ -63,8 +63,8 @@ export type SessionReplayAccumulatingPipeline = AccumulatingPipeline<
     OverflowOutput // R: redirect output names this pipeline can emit
 >
 
-export interface SessionReplayAccumulatingPipelineConfig {
-    recordPipeline: SessionReplayRecordPipeline
+export interface SessionReplayPipelineConfig {
+    recordPipeline: SessionReplayInnerPipeline
     sessionBatchFactory: SessionBatchFactory
     /** Resolves per-session retention off the S3 write path in the resolve-retention flush step */
     retentionService: RetentionService
@@ -76,7 +76,7 @@ export interface SessionReplayAccumulatingPipelineConfig {
     maxBatchAgeMs: number
 }
 
-export interface SessionReplayPipelineConfig {
+export interface SessionReplayInnerPipelineConfig {
     outputs: IngestionOutputs<IngestionWarningsOutput | DlqOutput | OverflowOutput>
     eventIngestionRestrictionManager: EventIngestionRestrictionManager
     overflowEnabled: boolean
@@ -98,7 +98,7 @@ export interface SessionReplayPipelineConfig {
  * 4. Version Monitor - Check library version and emit warnings for old versions
  * 5. Record - Record parsed messages to session batches
  */
-export function createSessionReplayPipeline(config: SessionReplayPipelineConfig): SessionReplayRecordPipeline {
+export function createSessionReplayInnerPipeline(config: SessionReplayInnerPipelineConfig): SessionReplayInnerPipeline {
     const {
         outputs,
         eventIngestionRestrictionManager,
@@ -203,9 +203,7 @@ export function createSessionReplayPipeline(config: SessionReplayPipelineConfig)
  * path (retrying transient failures), writes the recorder to storage, commits the offsets it
  * covers, then records the flush metrics — all on a size or age trigger.
  */
-export function createSessionReplayAccumulatingPipeline(
-    config: SessionReplayAccumulatingPipelineConfig
-): SessionReplayAccumulatingPipeline {
+export function createSessionReplayPipeline(config: SessionReplayPipelineConfig): SessionReplayPipeline {
     const { recordPipeline, sessionBatchFactory, retentionService, offsetManager, maxBatchSizeBytes, maxBatchAgeMs } =
         config
 

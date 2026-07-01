@@ -9,7 +9,7 @@ import { newBatchPipelineBuilder } from '~/ingestion/framework/builders'
 import { createTopHogWrapper, sum, timer } from '~/ingestion/framework/extensions/tophog'
 import { PipelineConfig } from '~/ingestion/framework/result-handling-pipeline'
 import {
-    SessionReplayPipelineConfig,
+    SessionReplayInnerPipelineConfig,
     SessionReplayPipelineInput,
     SessionReplayPipelineOutput,
 } from '~/ingestion/pipelines/sessionreplay'
@@ -21,7 +21,7 @@ import { createRecordSessionEventStep } from '~/ingestion/pipelines/sessionrepla
 import { SessionBatchContext } from '~/ingestion/pipelines/sessionreplay/session-batch-context'
 import { createTeamFilterStep } from '~/ingestion/pipelines/sessionreplay/team-filter-step'
 
-export type MlMirrorReplayPipelineConfig = SessionReplayPipelineConfig & {
+export type MlMirrorReplayPipelineConfig = SessionReplayInnerPipelineConfig & {
     /** Shared, immutable scrub context (allow lists + tunables). */
     scrubContext: ScrubContext
 }

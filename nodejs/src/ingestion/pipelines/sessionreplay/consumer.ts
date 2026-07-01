@@ -17,10 +17,10 @@ import { IngestionConsumerConfig } from '~/ingestion/config'
 import { createOkContext } from '~/ingestion/framework/helpers'
 import { TopHog } from '~/ingestion/framework/tophog/tophog'
 import {
-    SessionReplayAccumulatingPipeline,
-    SessionReplayPipelineConfig,
-    SessionReplayRecordPipeline,
-    createSessionReplayAccumulatingPipeline,
+    SessionReplayInnerPipeline,
+    SessionReplayInnerPipelineConfig,
+    SessionReplayPipeline,
+    createSessionReplayInnerPipeline,
     createSessionReplayPipeline,
 } from '~/ingestion/pipelines/sessionreplay'
 import { getBlockEncryptor } from '~/ingestion/pipelines/sessionreplay/shared/crypto'
@@ -64,7 +64,7 @@ export type SessionRecordingIngesterConfig = SessionRecordingConfig &
     >
 
 /** Builds the session replay record pipeline for a deployment (default or ML mirror). */
-export type SessionReplayPipelineFactory = (config: SessionReplayPipelineConfig) => SessionReplayRecordPipeline
+export type SessionReplayPipelineFactory = (config: SessionReplayInnerPipelineConfig) => SessionReplayInnerPipeline
 
 /** Collaborators a deployment can inject to vary ingester behavior; anything omitted uses the primary default. */
 export interface SessionRecordingIngesterCollaborators {
@@ -96,7 +96,7 @@ export class SessionRecordingIngester {
     private readonly eventIngestionRestrictionManagerComponent: EventIngestionRestrictionManagerComponent
     private eventIngestionRestrictionManager!: EventIngestionRestrictionManager
     private stopEventIngestionRestrictionManager?: () => Promise<void>
-    private accumulatingPipeline!: SessionReplayAccumulatingPipeline
+    private accumulatingPipeline!: SessionReplayPipeline
     private readonly maxBatchSizeBytes: number
     private readonly maxBatchAgeMs: number
     private readonly outputs: IngestionOutputs<
@@ -168,7 +168,7 @@ export class SessionRecordingIngester {
         this.offsetManager = new KafkaOffsetManager(this.commitOffsets.bind(this), this.topic)
         this.maxBatchSizeBytes = this.config.SESSION_RECORDING_MAX_BATCH_SIZE_KB * 1024
         this.maxBatchAgeMs = this.config.SESSION_RECORDING_MAX_BATCH_AGE_MS
-        this.createPipeline = collaborators.createPipeline ?? createSessionReplayPipeline
+        this.createPipeline = collaborators.createPipeline ?? createSessionReplayInnerPipeline
         const metadataStore = collaborators.metadataStore ?? new SessionMetadataStore(outputs)
         const consoleLogStore =
             collaborators.consoleLogStore ??
@@ -309,7 +309,7 @@ export class SessionRecordingIngester {
             isDebugLoggingEnabled: this.isDebugLoggingEnabled,
         })
 
-        this.accumulatingPipeline = createSessionReplayAccumulatingPipeline({
+        this.accumulatingPipeline = createSessionReplayPipeline({
             recordPipeline,
             sessionBatchFactory: this.sessionBatchFactory,
             retentionService: this.retentionService,

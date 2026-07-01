@@ -1,7 +1,7 @@
 /**
  * Integration test for the session replay accumulating pipeline.
  *
- * Drives createSessionReplayAccumulatingPipeline end-to-end with every external dependency
+ * Drives createSessionReplayPipeline end-to-end with every external dependency
  * (Kafka, Redis, S3) mocked: real record pipeline, real flush pipeline (resolve retention → write
  * → commit offsets → record metrics), real retention service over a mock Redis client, and a mock
  * recorder standing in for the S3/metadata writes. It locks in the flush ordering the split-out
@@ -19,8 +19,8 @@ import { createOkContext } from '~/ingestion/framework/helpers'
 import { ok } from '~/ingestion/framework/results'
 import { KafkaOffsetManager } from '~/ingestion/pipelines/sessionreplay/kafka/offset-manager'
 import {
-    SessionReplayAccumulatingPipeline,
-    createSessionReplayAccumulatingPipeline,
+    SessionReplayPipeline,
+    createSessionReplayInnerPipeline,
     createSessionReplayPipeline,
 } from '~/ingestion/pipelines/sessionreplay/session-replay-pipeline'
 import { SessionBatchMetrics } from '~/ingestion/pipelines/sessionreplay/sessions/metrics'
@@ -90,7 +90,7 @@ function blockMetadata(sessionId: string): SessionBlockMetadata {
 }
 
 describe('session replay accumulating pipeline integration', () => {
-    let pipeline: SessionReplayAccumulatingPipeline
+    let pipeline: SessionReplayPipeline
     let mockRecorder: jest.Mocked<SessionBatchRecorder>
     let mockOffsetManager: jest.Mocked<KafkaOffsetManager>
     let mockRedisClient: { mget: jest.Mock; pipeline: jest.Mock }
@@ -173,7 +173,7 @@ describe('session replay accumulating pipeline integration', () => {
             .mockImplementation(() => events.push('metrics'))
         jest.spyOn(SessionBatchMetrics, 'incrementSessionsDroppedDuringFlush').mockImplementation(() => {})
 
-        const recordPipeline = createSessionReplayPipeline({
+        const recordPipeline = createSessionReplayInnerPipeline({
             outputs: createMockIngestionOutputs<
                 typeof DLQ_OUTPUT | typeof OVERFLOW_OUTPUT | typeof INGESTION_WARNINGS_OUTPUT
             >(),
@@ -188,7 +188,7 @@ describe('session replay accumulating pipeline integration', () => {
             isDebugLoggingEnabled: () => false,
         })
 
-        pipeline = createSessionReplayAccumulatingPipeline({
+        pipeline = createSessionReplayPipeline({
             recordPipeline,
             sessionBatchFactory: fakeFactory,
             retentionService,

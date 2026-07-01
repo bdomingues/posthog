@@ -1,11 +1,11 @@
 export {
-    createSessionReplayAccumulatingPipeline,
     createSessionReplayPipeline,
-    type SessionReplayAccumulatingPipeline,
-    type SessionReplayPipelineConfig,
+    createSessionReplayInnerPipeline,
+    type SessionReplayPipeline,
+    type SessionReplayInnerPipelineConfig,
     type SessionReplayPipelineInput,
     type SessionReplayPipelineOutput,
-    type SessionReplayRecordPipeline,
+    type SessionReplayInnerPipeline,
 } from './session-replay-pipeline'
 
 export { createParseMessageStep, type ParseMessageStepInput, type ParseMessageStepOutput } from './parse-message-step'
