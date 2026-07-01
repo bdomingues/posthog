@@ -1,4 +1,10 @@
-import { AccumulatingPipeline, BeforeAccumulationInput, BeforeAccumulationOutput } from './accumulating-pipeline'
+import {
+    AccumulatingPipeline,
+    AccumulatingResult,
+    AccumulationContext,
+    BeforeAccumulationInput,
+    BeforeAccumulationOutput,
+} from './accumulating-pipeline'
 import { BatchPipeline, BatchPipelineResultWithContext, OkResultWithContext } from './batch-pipeline.interface'
 import { createOkContext } from './helpers'
 import { Pipeline } from './pipeline.interface'
@@ -7,6 +13,38 @@ import { isOkResult, ok } from './results'
 type RecordIn = { id: number }
 // The batch context carries its own accumulator array, like SessionBatchRecorder.
 type Batch = { records: number[] }
+
+// Flush pipeline: receives the whole batch context (one element) and emits its accumulated records.
+class RecordsFlushPipeline
+    implements BatchPipeline<Batch & AccumulationContext, number[], Record<string, never>, Record<string, never>>
+{
+    private buffer: OkResultWithContext<Batch & AccumulationContext, Record<string, never>>[] = []
+
+    feed(elements: OkResultWithContext<Batch & AccumulationContext, Record<string, never>>[]): void {
+        this.buffer.push(...elements)
+    }
+
+    next(): Promise<BatchPipelineResultWithContext<number[], Record<string, never>> | null> {
+        if (this.buffer.length === 0) {
+            return Promise.resolve(null)
+        }
+        const out = this.buffer
+        this.buffer = []
+        return Promise.resolve(
+            out.map((element) => ({ result: ok(element.result.value.records), context: element.context }))
+        )
+    }
+}
+
+// Concatenates the records emitted by RecordsFlushPipeline out of a flushed result.
+function flushedRecords(
+    result: AccumulatingResult<RecordIn, Record<string, never>, number[], Record<string, never>> | null
+): number[] {
+    if (!result || !result.flushed) {
+        return []
+    }
+    return result.elements.flatMap((element) => (isOkResult(element.result) ? element.result.value : []))
+}
 
 function feedBatch(ids: number[]): OkResultWithContext<RecordIn, Record<string, never>>[] {
     return ids.map((id) => createOkContext({ id }, {}))
@@ -40,29 +78,8 @@ class FoldingRecordPipeline
     }
 }
 
-// Passthrough flush pipeline: emits one result per drained unit.
-class PassthroughFlushPipeline
-    implements BatchPipeline<{ id: number }, { id: number }, Record<string, never>, Record<string, never>>
-{
-    private buffer: OkResultWithContext<{ id: number }, Record<string, never>>[] = []
-
-    feed(elements: OkResultWithContext<{ id: number }, Record<string, never>>[]): void {
-        this.buffer.push(...elements)
-    }
-
-    next(): Promise<BatchPipelineResultWithContext<{ id: number }, Record<string, never>> | null> {
-        if (this.buffer.length === 0) {
-            return Promise.resolve(null)
-        }
-        const out = this.buffer
-        this.buffer = []
-        return Promise.resolve(out)
-    }
-}
-
 describe('AccumulatingPipeline', () => {
     let beforeBatch: jest.Mock
-    let flushPipeline: PassthroughFlushPipeline
 
     function createPipeline(options: { flushAt: number; maxBatchAgeMs?: number }) {
         beforeBatch = jest.fn(
@@ -81,7 +98,6 @@ describe('AccumulatingPipeline', () => {
             BeforeAccumulationOutput<Batch>,
             Record<string, never>
         >
-        flushPipeline = new PassthroughFlushPipeline()
 
         return new AccumulatingPipeline<
             RecordIn,
@@ -89,21 +105,14 @@ describe('AccumulatingPipeline', () => {
             Record<string, never>,
             Record<string, never>,
             Batch,
-            { id: number },
-            Record<string, never>,
-            { id: number },
+            number[],
             Record<string, never>
         >({
-            recordPipeline: new FoldingRecordPipeline(),
+            pipeline: new FoldingRecordPipeline(),
             beforeBatch: beforePipeline,
             shouldFlush: (batchContext) => batchContext.records.length >= options.flushAt,
             maxBatchAgeMs: options.maxBatchAgeMs ?? 60_000,
-            drainAccumulator: (batchContext) => {
-                const units = batchContext.records.map((id) => createOkContext({ id }, {}))
-                batchContext.records.length = 0
-                return units
-            },
-            flushPipeline,
+            flushPipeline: new RecordsFlushPipeline(),
         })
     }
 
@@ -135,11 +144,7 @@ describe('AccumulatingPipeline', () => {
 
         const flushed = await drainNext(pipeline)
         expect(flushed).toMatchObject({ flushed: true })
-        expect(flushed!.elements.map((e) => isOkResult(e.result) && e.result.value)).toEqual([
-            { id: 1 },
-            { id: 2 },
-            { id: 3 },
-        ])
+        expect(flushedRecords(flushed)).toEqual([1, 2, 3])
         // re-mint: beforeBatch ran for the initial cycle and again after the flush
         expect(beforeBatch).toHaveBeenCalledTimes(2)
     })
@@ -172,9 +177,12 @@ describe('AccumulatingPipeline', () => {
         const flushed = await pipeline.flush()
 
         expect(flushed).toMatchObject({ flushed: true })
-        expect(flushed!.elements).toHaveLength(2)
-        // re-minted, so a subsequent flush with nothing accumulated is a no-op
-        expect(await pipeline.flush()).toBeNull()
+        expect(flushedRecords(flushed)).toEqual([1, 2])
+        // the batch was re-minted; a forced flush still emits a flushed result, now with no records
+        // (so the consumer always gets a flush signal to commit offsets on, even for an empty batch)
+        const empty = await pipeline.flush()
+        expect(empty).toMatchObject({ flushed: true })
+        expect(flushedRecords(empty)).toEqual([])
     })
 
     describe('age timer', () => {
@@ -193,7 +201,7 @@ describe('AccumulatingPipeline', () => {
 
             const flushed = await drainNext(pipeline)
             expect(flushed).toMatchObject({ flushed: true })
-            expect(flushed!.elements).toHaveLength(1)
+            expect(flushedRecords(flushed)).toEqual([1])
 
             await pipeline.stop()
         })
@@ -241,7 +249,7 @@ describe('AccumulatingPipeline', () => {
 
             const flushed = await pipeline.stop()
             expect(flushed).toMatchObject({ flushed: true })
-            expect(flushed!.elements).toHaveLength(2)
+            expect(flushedRecords(flushed)).toEqual([1, 2])
         })
 
         it('returns null when there is nothing accumulated', async () => {
@@ -278,21 +286,14 @@ describe('AccumulatingPipeline', () => {
             Record<string, never>,
             Record<string, never>,
             Batch,
-            { id: number },
-            Record<string, never>,
-            { id: number },
+            number[],
             Record<string, never>
         >({
-            recordPipeline: new FoldingRecordPipeline(),
+            pipeline: new FoldingRecordPipeline(),
             beforeBatch: beforePipeline,
             shouldFlush: () => false,
             maxBatchAgeMs: 60_000,
-            drainAccumulator: (batchContext) => {
-                const units = batchContext.records.map((id) => createOkContext({ id }, {}))
-                batchContext.records.length = 0
-                return units
-            },
-            flushPipeline: new PassthroughFlushPipeline(),
+            flushPipeline: new RecordsFlushPipeline(),
         })
 
         await pipeline.feed(feedBatch([1]))
@@ -310,10 +311,10 @@ describe('AccumulatingPipeline', () => {
         const firstFlush = await flushPromise
         await feedPromise
 
-        expect(firstFlush!.elements.map((e) => isOkResult(e.result) && e.result.value)).toEqual([{ id: 1 }])
+        expect(flushedRecords(firstFlush)).toEqual([1])
 
         const secondFlush = await pipeline.flush()
-        expect(secondFlush!.elements.map((e) => isOkResult(e.result) && e.result.value)).toEqual([{ id: 2 }])
+        expect(flushedRecords(secondFlush)).toEqual([2])
     })
 
     it('throws when beforeBatch returns a non-ok result', async () => {
@@ -329,17 +330,14 @@ describe('AccumulatingPipeline', () => {
             Record<string, never>,
             Record<string, never>,
             Batch,
-            { id: number },
-            Record<string, never>,
-            { id: number },
+            number[],
             Record<string, never>
         >({
-            recordPipeline: new FoldingRecordPipeline(),
+            pipeline: new FoldingRecordPipeline(),
             beforeBatch: beforePipeline,
             shouldFlush: () => false,
             maxBatchAgeMs: 60_000,
-            drainAccumulator: (batchContext) => batchContext.records.map((id) => createOkContext({ id }, {})),
-            flushPipeline: new PassthroughFlushPipeline(),
+            flushPipeline: new RecordsFlushPipeline(),
         })
 
         await expect(pipeline.feed(feedBatch([1]))).rejects.toThrow('beforeBatch returned non-ok result')

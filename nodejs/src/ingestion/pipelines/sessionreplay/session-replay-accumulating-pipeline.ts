@@ -8,15 +8,13 @@ import {
     BeforeAccumulationOutput,
 } from '~/ingestion/framework/accumulating-pipeline'
 import { BatchPipeline } from '~/ingestion/framework/batch-pipeline.interface'
-import { newBatchPipelineBuilder, newPipelineBuilder } from '~/ingestion/framework/builders'
-import { createOkContext } from '~/ingestion/framework/helpers'
+import { newAccumulatingPipeline } from '~/ingestion/framework/builders'
 import { ok } from '~/ingestion/framework/results'
 import { ProcessingStep } from '~/ingestion/framework/steps'
 import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
 
 import { SessionReplayPipelineInput, SessionReplayPipelineOutput } from './session-replay-pipeline'
 import { SessionBatchContext, SessionBatchFactory } from './sessions/session-batch-factory'
-import { SessionBatchRecorder } from './sessions/session-batch-recorder'
 
 /**
  * The per-message record pipeline wrapped by the accumulating pipeline. Its input carries the
@@ -37,8 +35,6 @@ export type SessionReplayAccumulatingPipeline = AccumulatingPipeline<
     { message: Message },
     { message: Message },
     SessionBatchContext,
-    SessionBatchRecorder,
-    Record<string, never>,
     SessionBlockMetadata[],
     Record<string, never>,
     OverflowOutput
@@ -55,7 +51,7 @@ export interface SessionReplayAccumulatingPipelineConfig {
 
 /**
  * Assembles the session replay accumulating pipeline: the record pipeline folds events into a
- * recorder minted per cycle by the factory; the flush pipeline writes the recorder to storage on a
+ * recorder minted per cycle by the factory; the flush pipeline writes that recorder to storage on a
  * size or age trigger. Offset commit stays with the consumer (it commits on each flushed result).
  */
 export function createSessionReplayAccumulatingPipeline(
@@ -72,17 +68,24 @@ export function createSessionReplayAccumulatingPipeline(
         )
 
     // flush step: write the accumulated batch to storage (without committing offsets).
-    const flushStep: ProcessingStep<SessionBatchRecorder, SessionBlockMetadata[]> = async (recorder) =>
-        ok(await recorder.flushToStorage())
+    const flushStep: ProcessingStep<SessionBatchContext & AccumulationContext, SessionBlockMetadata[]> = async (
+        batchContext
+    ) => ok(await batchContext.sessionBatchRecorder.flushToStorage())
 
-    return new AccumulatingPipeline({
-        beforeBatch: newPipelineBuilder<BeforeAccumulationInput>().pipe(beforeBatchStep).build(),
-        recordPipeline,
+    return newAccumulatingPipeline<
+        SessionReplayPipelineInput,
+        SessionReplayPipelineOutput,
+        { message: Message },
+        { message: Message },
+        SessionBatchContext,
+        SessionBlockMetadata[],
+        Record<string, never>,
+        OverflowOutput
+    >({
+        pipeline: recordPipeline,
+        beforeBatch: (builder) => builder.pipe(beforeBatchStep),
+        flush: (builder) => builder.sequentially((b) => b.pipe(flushStep)),
         shouldFlush: (batchContext) => batchContext.sessionBatchRecorder.size >= maxBatchSizeBytes,
         maxBatchAgeMs,
-        drainAccumulator: (batchContext) => [createOkContext(batchContext.sessionBatchRecorder, {})],
-        flushPipeline: newBatchPipelineBuilder<SessionBatchRecorder, Record<string, never>>()
-            .sequentially((b) => b.pipe(flushStep))
-            .build(),
     })
 }

@@ -32,8 +32,8 @@ export type AccumulatingResult<TRecordOut, CRecordOut, TFlushOut, CFlushOut, R e
 
 /**
  * Constructor config, ordered by when each part runs in a cycle: beforeBatch mints the accumulator,
- * recordPipeline folds events, shouldFlush/maxBatchAgeMs decide when to flush, then drainAccumulator
- * snapshots the accumulator and flushPipeline persists it.
+ * pipeline folds events, shouldFlush/maxBatchAgeMs decide when to flush, then flushPipeline persists
+ * the batch context.
  */
 export interface AccumulatingPipelineConfig<
     TRecordIn extends object,
@@ -41,8 +41,6 @@ export interface AccumulatingPipelineConfig<
     CRecordIn,
     CRecordOut,
     CBatch,
-    TFlushIn,
-    CFlushIn,
     TFlushOut,
     CFlushOut,
     R extends string = never,
@@ -50,20 +48,21 @@ export interface AccumulatingPipelineConfig<
     /** Mints a fresh accumulator for each cycle — runs before the first feed and after every flush. */
     beforeBatch: Pipeline<BeforeAccumulationInput, BeforeAccumulationOutput<CBatch>, Record<string, never>>
     /** Per-message pipeline that folds records into the current cycle's accumulator. */
-    recordPipeline: BatchPipeline<TRecordIn & CBatch & AccumulationContext, TRecordOut, CRecordIn, CRecordOut, R>
+    pipeline: BatchPipeline<TRecordIn & CBatch & AccumulationContext, TRecordOut, CRecordIn, CRecordOut, R>
     /** Size trigger: flush when this returns true for the current accumulator. */
     shouldFlush: (batchContext: CBatch & AccumulationContext) => boolean
     /** Age trigger interval. The timer only marks a flush due; the flush executes inside next(). */
     maxBatchAgeMs: number
-    /** Snapshots the accumulator into flush units (and clears it). */
-    drainAccumulator: (batchContext: CBatch & AccumulationContext) => OkResultWithContext<TFlushIn, CFlushIn>[]
-    /** Flush pipeline that persists the drained units. */
-    flushPipeline: BatchPipeline<TFlushIn, TFlushOut, CFlushIn, CFlushOut, R>
+    /**
+     * Flush pipeline that persists the batch context on a flush. It receives the whole batch context
+     * as a single element and fans out over sub-units (e.g. per session) internally if it needs to.
+     */
+    flushPipeline: BatchPipeline<CBatch & AccumulationContext, TFlushOut, Record<string, never>, CFlushOut, R>
 }
 
 /**
- * Wraps a per-message `recordPipeline` that folds events into an external accumulator, and
- * flushes that accumulator through a separate `flushPipeline` of steps on a size or age trigger.
+ * Wraps a per-message `pipeline` that folds events into an external accumulator, and flushes that
+ * accumulator through a separate `flushPipeline` of steps on a size or age trigger.
  *
  * Unlike BatchingPipeline — where each feed() is one batch — the accumulation boundary spans
  * many feed() calls and is decided by `shouldFlush` (size) plus an age timer. `beforeBatch`
@@ -89,8 +88,6 @@ export class AccumulatingPipeline<
     CRecordIn,
     CRecordOut,
     CBatch,
-    TFlushIn,
-    CFlushIn,
     TFlushOut,
     CFlushOut,
     R extends string = never,
@@ -113,7 +110,7 @@ export class AccumulatingPipeline<
     // via waitForActivity(); it is the liveness mechanism for a future wake-driven drain loop.
     private signal = new ResettableSignal()
 
-    private readonly recordPipeline: BatchPipeline<
+    private readonly pipeline: BatchPipeline<
         TRecordIn & CBatch & AccumulationContext,
         TRecordOut,
         CRecordIn,
@@ -125,10 +122,13 @@ export class AccumulatingPipeline<
         BeforeAccumulationOutput<CBatch>,
         Record<string, never>
     >
-    private readonly drainAccumulator: (
-        batchContext: CBatch & AccumulationContext
-    ) => OkResultWithContext<TFlushIn, CFlushIn>[]
-    private readonly flushPipeline: BatchPipeline<TFlushIn, TFlushOut, CFlushIn, CFlushOut, R>
+    private readonly flushPipeline: BatchPipeline<
+        CBatch & AccumulationContext,
+        TFlushOut,
+        Record<string, never>,
+        CFlushOut,
+        R
+    >
     private readonly shouldFlush: (batchContext: CBatch & AccumulationContext) => boolean
     private readonly maxBatchAgeMs: number
 
@@ -139,16 +139,13 @@ export class AccumulatingPipeline<
             CRecordIn,
             CRecordOut,
             CBatch,
-            TFlushIn,
-            CFlushIn,
             TFlushOut,
             CFlushOut,
             R
         >
     ) {
-        this.recordPipeline = config.recordPipeline
+        this.pipeline = config.pipeline
         this.beforePipeline = config.beforeBatch
-        this.drainAccumulator = config.drainAccumulator
         this.flushPipeline = config.flushPipeline
         this.shouldFlush = config.shouldFlush
         this.maxBatchAgeMs = config.maxBatchAgeMs
@@ -173,7 +170,7 @@ export class AccumulatingPipeline<
     }
 
     private async drainAndFlush(): Promise<AccumulatingResult<TRecordOut, CRecordOut, TFlushOut, CFlushOut, R> | null> {
-        await this.drain(this.recordPipeline)
+        await this.drain(this.pipeline)
         return this.flushNow()
     }
 
@@ -186,7 +183,7 @@ export class AccumulatingPipeline<
                 result: { ...element.result, value: { ...element.result.value, ...batchContext } },
                 context: element.context,
             }))
-            this.recordPipeline.feed(tagged)
+            this.pipeline.feed(tagged)
         })
     }
 
@@ -214,7 +211,7 @@ export class AccumulatingPipeline<
 
     private async pump(): Promise<AccumulatingResult<TRecordOut, CRecordOut, TFlushOut, CFlushOut, R> | null> {
         // Drain the record (main) pipeline first; yield its results so the consumer can track offsets.
-        const recorded = await this.drain(this.recordPipeline)
+        const recorded = await this.drain(this.pipeline)
         if (recorded.length > 0) {
             return { flushed: false, elements: recorded }
         }
@@ -236,12 +233,9 @@ export class AccumulatingPipeline<
             return null
         }
 
-        const units = this.drainAccumulator(this.currentBatchContext)
-        if (units.length === 0) {
-            return null
-        }
-
-        this.flushPipeline.feed(units)
+        // Hand the whole batch context to the flush pipeline as a single element; the flush pipeline
+        // fans out over sub-units (e.g. per session) internally if it needs per-unit steps.
+        this.flushPipeline.feed([createOkContext(this.currentBatchContext, {})])
         const elements = await this.drain(this.flushPipeline)
         this.currentBatchContext = await this.runBeforeBatch()
         return { flushed: true, elements }

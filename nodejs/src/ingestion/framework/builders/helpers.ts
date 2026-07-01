@@ -1,4 +1,11 @@
 import {
+    AccumulatingPipeline,
+    AccumulationContext,
+    BeforeAccumulationInput,
+    BeforeAccumulationOutput,
+} from '~/ingestion/framework/accumulating-pipeline'
+import { BatchPipeline } from '~/ingestion/framework/batch-pipeline.interface'
+import {
     AfterBatchInput,
     AfterBatchOutput,
     BatchingContext,
@@ -72,4 +79,46 @@ export function newBatchingPipeline<
     ).build()
 
     return new BatchingPipeline(subPipeline, beforePipeline, afterPipeline, options)
+}
+
+/**
+ * Builder-style constructor for AccumulatingPipeline, mirroring newBatchingPipeline: `beforeBatch`
+ * and `flush` are builder callbacks that get `.build()`-ed for you. The record `pipeline` is passed
+ * pre-built, since deployments choose it (e.g. the default vs ML-mirror session replay pipeline).
+ */
+export function newAccumulatingPipeline<
+    TRecordIn extends object,
+    TRecordOut,
+    CRecordIn,
+    CRecordOut,
+    CBatch,
+    TFlushOut,
+    CFlushOut = Record<string, never>,
+    R extends string = never,
+>(config: {
+    pipeline: BatchPipeline<TRecordIn & CBatch & AccumulationContext, TRecordOut, CRecordIn, CRecordOut, R>
+    beforeBatch: (
+        builder: StartPipelineBuilder<BeforeAccumulationInput, Record<string, never>>
+    ) => PipelineBuilder<BeforeAccumulationInput, BeforeAccumulationOutput<CBatch>, Record<string, never>>
+    flush: (
+        builder: BatchPipelineBuilder<CBatch & AccumulationContext, CBatch & AccumulationContext, Record<string, never>>
+    ) => BatchPipelineBuilder<CBatch & AccumulationContext, TFlushOut, Record<string, never>, CFlushOut, R>
+    shouldFlush: (batchContext: CBatch & AccumulationContext) => boolean
+    maxBatchAgeMs: number
+}): AccumulatingPipeline<TRecordIn, TRecordOut, CRecordIn, CRecordOut, CBatch, TFlushOut, CFlushOut, R> {
+    const beforeBatch = config
+        .beforeBatch(new StartPipelineBuilder<BeforeAccumulationInput, Record<string, never>>())
+        .build()
+    const flushPipeline = config
+        .flush(
+            new BatchPipelineBuilder(new BufferingBatchPipeline<CBatch & AccumulationContext, Record<string, never>>())
+        )
+        .build()
+    return new AccumulatingPipeline<TRecordIn, TRecordOut, CRecordIn, CRecordOut, CBatch, TFlushOut, CFlushOut, R>({
+        beforeBatch,
+        pipeline: config.pipeline,
+        shouldFlush: config.shouldFlush,
+        maxBatchAgeMs: config.maxBatchAgeMs,
+        flushPipeline,
+    })
 }
