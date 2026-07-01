@@ -55,7 +55,6 @@ export type IngestionSessionReplayServerConfig = BaseServerConfig &
         'LOG_LEVEL' | 'PLUGIN_SERVER_MODE' | 'HEALTHCHECK_MAX_STALE_SECONDS' | 'KAFKA_HEALTHCHECK_SECONDS'
     >
 
-/** Builds the session-recording and restriction Redis pools a replay deployment needs. */
 /** Connection config for the session-recording Redis, shared by the raw pool and the RedisV2 wrapper. */
 function sessionRecordingRedisConnection(config: IngestionSessionReplayServerConfig): RedisConnectionConfig {
     return config.POSTHOG_SESSION_RECORDING_REDIS_HOST
@@ -77,6 +76,7 @@ export function buildSessionReplayRedisV2(config: IngestionSessionReplayServerCo
     })
 }
 
+/** Builds the session-recording and restriction Redis pools a replay deployment needs. */
 export function buildSessionReplayRedisPools(config: IngestionSessionReplayServerConfig): {
     redisPool: RedisPool
     restrictionRedisPool: RedisPool
