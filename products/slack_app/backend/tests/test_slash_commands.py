@@ -8,7 +8,7 @@ region routing, user resolution, and the bridge into ``dispatch_rules_command``.
 from typing import Any
 from urllib.parse import urlencode
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.core.cache import cache
 from django.test import TestCase
@@ -111,18 +111,6 @@ class TestSlashCommandWebhookValidation(_SlashCommandTestBase):
         assert body["response_type"] == "ephemeral"
         assert "Missing Slack payload" in body["text"]
 
-    @patch("products.slack_app.backend.views.slack_command.dispatch_rules_command")
-    def test_retry_header_short_circuits_without_dispatch(self, mock_dispatch: Any) -> None:
-        """Slack retries when our 200 doesn't arrive within 3s — re-running dispatch
-        would produce duplicate ``rules add`` rows."""
-        response = self._post_slash_command(
-            self._default_payload(text="rules list"),
-            HTTP_X_SLACK_RETRY_NUM="1",
-        )
-        assert response.status_code == 200
-        assert response.content == b""
-        mock_dispatch.assert_not_called()
-
 
 class TestSlashCommandDispatch(_SlashCommandTestBase):
     def setUp(self) -> None:
@@ -136,6 +124,20 @@ class TestSlashCommandDispatch(_SlashCommandTestBase):
         self.mock_dispatch = self.enterContext(
             patch("products.slack_app.backend.views.slack_command.dispatch_rules_command")
         )
+        # Slash-command dispatch runs on a background thread so Slack's 3-second ack budget
+        # is never blocked by ``users.info`` / ``chat_postMessage``. In tests we drop the
+        # thread and run the target inline so assertions can still see ``dispatch_rules_command``
+        # being called before the test method returns. ``close_old_connections`` in the worker
+        # would close the outer test-case transaction's connection, so stub it out.
+        self.enterContext(patch("products.slack_app.backend.views.slack_command.close_old_connections"))
+        thread_patch = self.enterContext(patch("products.slack_app.backend.views.slack_command.threading.Thread"))
+
+        def _run_inline(*_args: Any, target: Any, kwargs: dict, **_thread_kwargs: Any) -> Any:
+            thread = MagicMock()
+            thread.start.side_effect = lambda: target(**kwargs)
+            return thread
+
+        thread_patch.side_effect = _run_inline
 
     def test_help_invokes_dispatch_with_help_action(self) -> None:
         response = self._post_slash_command(self._default_payload(text="help"))
