@@ -52,7 +52,7 @@ describe('createRecordSessionEventStep', () => {
         sessionBatchRecorder: mockBatchRecorder,
     })
 
-    const step = () => createRecordSessionEventStep({ isDebugLoggingEnabled: () => false })
+    const step = createRecordSessionEventStep({ isDebugLoggingEnabled: () => false })
 
     beforeEach(() => {
         jest.clearAllMocks()
@@ -64,7 +64,7 @@ describe('createRecordSessionEventStep', () => {
 
     it('should record message to the batch recorder carried on the input', async () => {
         const input = createInput()
-        await step()(input)
+        await step(input)
 
         expect(mockBatchRecorder.record).toHaveBeenCalledTimes(1)
         expect(mockBatchRecorder.record).toHaveBeenCalledWith({
@@ -75,7 +75,7 @@ describe('createRecordSessionEventStep', () => {
 
     it('should return ok result with input preserved', async () => {
         const input = createInput()
-        const result = await step()(input)
+        const result = await step(input)
 
         expect(result.type).toBe(PipelineResultType.OK)
         if (result.type === PipelineResultType.OK) {
@@ -86,14 +86,14 @@ describe('createRecordSessionEventStep', () => {
     })
 
     it('should reset sessions revoked metric', async () => {
-        await step()(createInput())
+        await step(createInput())
 
         expect(SessionRecordingIngesterMetrics.resetSessionsRevoked).toHaveBeenCalledTimes(1)
     })
 
     it('should observe session info metric', async () => {
         const input = createInput({ metadata: { partition: 0, topic: 'test', offset: 1, timestamp: 0, rawSize: 250 } })
-        await step()(input)
+        await step(input)
 
         expect(SessionRecordingIngesterMetrics.observeSessionInfo).toHaveBeenCalledWith(250)
     })
@@ -104,7 +104,7 @@ describe('createRecordSessionEventStep', () => {
             extraProperty: 'should be preserved',
         }
 
-        const result = await step()(input)
+        const result = await step(input)
 
         expect(result.type).toBe(PipelineResultType.OK)
         if (result.type === PipelineResultType.OK) {
