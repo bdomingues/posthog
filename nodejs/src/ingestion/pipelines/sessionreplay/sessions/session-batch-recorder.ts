@@ -113,7 +113,6 @@ export class SessionBatchRecorder {
         const { partition } = message.message.metadata
         const sessionId = message.message.session_id
         const teamId = message.team.teamId
-        const teamSessionKey = `${teamId}$${sessionId}`
 
         // Check if this is a new session and check if we're in breach of the rate limit
         const isNewSession = await this.sessionTracker.trackSession(teamId, sessionId)
@@ -146,14 +145,14 @@ export class SessionBatchRecorder {
             return this.ignoreMessage(message)
         }
 
-        const isEventAllowed = this.rateLimiter.handleMessage(teamSessionKey, partition, message.message)
+        const isEventAllowed = this.rateLimiter.handleMessage(teamId, sessionId, partition, message.message)
 
         if (!isEventAllowed) {
             logger.debug('🔁', 'session_batch_recorder_event_rate_limited', {
                 partition,
                 sessionId,
                 teamId,
-                eventCount: this.rateLimiter.getEventCount(teamSessionKey),
+                eventCount: this.rateLimiter.getEventCount(teamId, sessionId),
                 batchId: this.batchId,
             })
 
