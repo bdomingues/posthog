@@ -5,10 +5,10 @@ from unittest.mock import patch
 
 from rest_framework.test import APIRequestFactory
 
-from products.approvals.backend.exceptions import ApprovalRequired
-from products.approvals.backend.models import ApprovalPolicy, ChangeRequest, ChangeRequestState
 from posthog.constants import AvailableFeature
 
+from products.approvals.backend.exceptions import ApprovalRequired
+from products.approvals.backend.models import ApprovalPolicy, ChangeRequest, ChangeRequestState
 from products.experiments.backend.experiment_service import ExperimentService
 from products.experiments.backend.models.experiment import Experiment
 

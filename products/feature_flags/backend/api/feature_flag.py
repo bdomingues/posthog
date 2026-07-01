@@ -714,7 +714,6 @@ class EvaluationContextSerializerMixin(serializers.Serializer):
                 capture_exception(e)
 
     def _log_evaluation_context_change(self, obj: FeatureFlag, before: list[str], after: list[str]) -> None:
-
         from posthog.models.activity_logging.activity_log import Change, Detail
 
         request = self.context.get("request")

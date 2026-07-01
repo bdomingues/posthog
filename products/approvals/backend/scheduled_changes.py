@@ -85,7 +85,6 @@ def gate_scheduled_change(flag: "FeatureFlag", payload: dict[str, Any], user) ->
         EnableFeatureFlagAction,
         UpdateFeatureFlagAction,
     )
-
     from products.feature_flags.backend.api.feature_flag import FeatureFlagSerializer  # noqa: PLC0415
 
     team = flag.team

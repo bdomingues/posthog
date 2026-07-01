@@ -12,7 +12,6 @@ from products.approvals.backend.actions.feature_flags import (
 )
 from products.approvals.backend.models import ApprovalPolicy, ChangeRequest
 from products.approvals.backend.policies import PolicyEngine
-
 from products.feature_flags.backend.models.feature_flag import FeatureFlag
 
 SINGLE_DICT_PATHS = {"holdout"}

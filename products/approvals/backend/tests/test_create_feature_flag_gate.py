@@ -10,7 +10,6 @@ from products.approvals.backend.actions.feature_flags import (
 )
 from products.approvals.backend.models import ApprovalPolicy, ChangeRequest, ChangeRequestState
 from products.approvals.backend.services import ChangeRequestService
-
 from products.feature_flags.backend.models.feature_flag import FeatureFlag
 
 
@@ -42,10 +41,12 @@ class TestCreateDetection(APIBaseTest):
         result = EnableFeatureFlagAction.detect(self._post_request(), view, {"key": "f", "active": False})
         assert result is False
 
-    def test_enable_does_not_fire_when_active_absent_on_create(self):
+    def test_enable_fires_when_active_absent_on_create(self):
+        # FeatureFlag.active defaults to True, so a create that omits `active` is still born
+        # enabled — the gate must fire, otherwise the enable policy is trivially bypassed.
         view = self._serializer_view()
         result = EnableFeatureFlagAction.detect(self._post_request(), view, {"key": "f"})
-        assert result is False
+        assert result is True
 
     def test_disable_never_fires_on_create(self):
         view = self._serializer_view()
@@ -120,6 +121,21 @@ class TestCreateFlagGateAPI(APIBaseTest):
         assert response.status_code == 409
         assert response.json().get("code") == "approval_required"
         assert not FeatureFlag.objects.filter(team=self.team, key="born-active").exists()
+
+    def test_create_flag_without_active_under_enable_policy_requires_approval(self, _mock_enabled):
+        # Omitting `active` lands the flag enabled (model default True), so the enable policy
+        # must still gate it — the create must not slip through unapproved.
+        self._enable_policy()
+
+        response = self.client.post(
+            f"/api/projects/{self.team.id}/feature_flags/",
+            {"key": "born-active-implicit", "filters": {"groups": [{"rollout_percentage": 100}]}},
+            format="json",
+        )
+
+        assert response.status_code == 409
+        assert response.json().get("code") == "approval_required"
+        assert not FeatureFlag.objects.filter(team=self.team, key="born-active-implicit").exists()
 
     def test_create_disabled_flag_under_enable_policy_succeeds(self, _mock_enabled):
         self._enable_policy()

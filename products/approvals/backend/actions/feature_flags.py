@@ -199,13 +199,16 @@ class FeatureFlagActionBase(BaseAction):
             return False
 
         change = _get_validated_change(request, view, *args, **kwargs)
-        desired_active = change.get("active")
 
         if flag is None:
             # Create: gate only when the flag is born in the gated target state.
+            # FeatureFlag.active defaults to True, so a create that omits `active`
+            # still lands enabled — treat missing as the model default.
+            desired_active = change.get("active", True)
             if not cls.gate_on_create or desired_active is not True or cls.target_active_state is not True:
                 return False
         else:
+            desired_active = change.get("active")
             current_active = flag.active
             if (
                 desired_active is None

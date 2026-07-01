@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 from django.utils import timezone
 
-from products.approvals.backend.models import ApprovalPolicy, ChangeRequest, ChangeRequestState, ValidationStatus
-from products.approvals.backend.services import ChangeRequestService
 from posthog.tasks.process_scheduled_changes import process_scheduled_changes
 
+from products.approvals.backend.models import ApprovalPolicy, ChangeRequest, ChangeRequestState, ValidationStatus
+from products.approvals.backend.services import ChangeRequestService
 from products.feature_flags.backend.models.feature_flag import FeatureFlag
 from products.feature_flags.backend.models.scheduled_change import ScheduledChange
 

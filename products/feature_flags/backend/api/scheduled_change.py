@@ -8,9 +8,9 @@ from rest_framework.exceptions import PermissionDenied
 
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.api.shared import UserBasicSerializer
+
 from products.approvals.backend.models import ChangeRequest
 from products.approvals.backend.scheduled_changes import gate_scheduled_change
-
 from products.feature_flags.backend.api.feature_flag import CanEditFeatureFlag
 from products.feature_flags.backend.models.feature_flag import FeatureFlag
 from products.feature_flags.backend.models.scheduled_change import ScheduledChange

@@ -2134,6 +2134,16 @@ class ExperimentService:
         # experiment-state writes below, so hoisting it is safe.
         self._sync_feature_flag_on_update(experiment, update_data, feature_flag, context, update_feature_flag_params)
 
+        # --- feature flag activation on launch (OUTSIDE the atomic block) -----
+        # Setting a start_date on a draft launches it, which activates the linked
+        # flag. Route that flip through the approval gate — exactly like
+        # launch_experiment — so an enable policy can't be bypassed by launching
+        # via update_experiment. Runs outside the transaction for the same reason
+        # as the sync above: an ApprovalRequired must leave the pending
+        # ChangeRequest intact rather than roll it back.
+        if experiment.is_draft and update_data.get("start_date") is not None:
+            self._set_flag_active_gated(feature_flag, True, context.get("request"))
+
         with transaction.atomic():
             # --- saved metrics sync (update-in-place) -----------
             old_saved_metric_uuids: dict[str, set[str]] = {"primary": set(), "secondary": set()}
@@ -2247,12 +2257,6 @@ class ExperimentService:
                 saved_metrics_data if update_saved_metrics else None,
             )
             self._validate_metric_ordering_on_update(experiment, update_data)
-
-            # --- feature flag activation on launch -----------------------------
-            has_start_date = update_data.get("start_date") is not None
-            if experiment.is_draft and has_start_date:
-                feature_flag.active = True
-                feature_flag.save()
 
             # --- apply changes and save ----------------------------------------
             for attr, value in update_data.items():
