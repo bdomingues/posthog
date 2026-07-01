@@ -1,6 +1,5 @@
 import { logger } from '~/common/utils/logger'
 import { captureException } from '~/common/utils/posthog'
-import { AccumulationContext } from '~/ingestion/framework/accumulating-pipeline'
 import { ok } from '~/ingestion/framework/results'
 import { ProcessingStep } from '~/ingestion/framework/steps'
 import { RetentionPeriod } from '~/ingestion/pipelines/sessionreplay/shared/constants'
@@ -24,7 +23,7 @@ export type RetentionByKey = Map<string, RetentionPeriod>
  *
  * Additive: preserves the input batch context and adds `retentionByKey`.
  */
-export function createResolveRetentionStep<T extends SessionBatchContext & AccumulationContext>(
+export function createResolveRetentionStep<T extends SessionBatchContext>(
     retentionService: RetentionService
 ): ProcessingStep<T, T & { retentionByKey: RetentionByKey }> {
     return async function resolveRetentionStep(batchContext) {
