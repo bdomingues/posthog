@@ -220,6 +220,28 @@ class TestCreateFlagGateAPI(APIBaseTest):
         assert not FeatureFlag.objects.filter(team=self.team, key="born-active-rollout").exists()
         assert ChangeRequest.objects.count() == 0
 
+    def test_create_remote_config_flag_without_filters_requires_rollout_approval(self, _mock_enabled):
+        # A remote-config create carries no `filters`; the serializer synthesizes a 100% rollout.
+        # That default must be materialized before the gate runs, otherwise the create slips past
+        # the rollout policy and lands a 100% rollout unapproved.
+        self._update_policy({"type": "before_after", "field": "rollout_percentage", "operator": ">", "value": 0})
+
+        response = self.client.post(
+            f"/api/projects/{self.team.id}/feature_flags/",
+            {"key": "remote-config-flag", "active": False, "is_remote_configuration": True},
+            format="json",
+        )
+
+        assert response.status_code == 409, response.content
+        assert response.json().get("code") == "approval_required"
+        assert not FeatureFlag.objects.filter(team=self.team, key="remote-config-flag").exists()
+
+        cr = ChangeRequest.objects.get(id=response.json()["change_request_id"])
+        ChangeRequestService(cr, self.user).approve()
+
+        flag = FeatureFlag.objects.get(team=self.team, key="remote-config-flag")
+        assert flag.filters["groups"][0]["rollout_percentage"] == 100
+
     def test_reapplying_create_change_request_does_not_duplicate(self, _mock_enabled):
         self._enable_policy()
 
