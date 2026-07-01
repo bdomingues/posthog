@@ -116,7 +116,8 @@ class TestScheduledChangeGating(APIBaseTest):
         scheduled.save()
         process_scheduled_changes()
 
-        flag.refresh_from_db()
+        # Reload into a fresh instance so the narrowed type from the earlier assert is widened.
+        flag = FeatureFlag.objects.get(pk=flag.pk)
         assert flag.active is True
         cr.refresh_from_db()
         assert cr.state == ChangeRequestState.APPLIED
