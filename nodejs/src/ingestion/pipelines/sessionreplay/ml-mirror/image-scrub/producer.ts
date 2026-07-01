@@ -1,19 +1,10 @@
-/**
- * Producer-side logic for the image-scrub topic, run inline by the ml-mirror anonymize pipeline.
- *
- * A recorded block can carry MANY inlined images, and we cannot afford a Redis round-trip per image
- * (the RTT dominates). So the API is BATCHED: collect every advanced-route image in the message, then
- * do ONE Redis round-trip to dedup them all and ONE Kafka send to post the fresh ones.
- *
- * For each image: compute its team-scoped reference; the caller substitutes it for the inline
- * `rr_dataURL`. We post the RAW image to the topic only the first time it's seen within the TTL. The
- * scrub consumer later writes the scrubbed image to S3 under the reference. Redis presence means only
- * "posted to the topic recently" (dedup), NOT "scrubbed image exists in S3".
- *
- * The reserve/release/produce operations are injected as plain functions so this stays pure and
- * unit-testable; the ml-mirror server wires them to the Redis pool (redis-dedup.ts) and the Kafka
- * producer. Kept in sync with the consumer package's content-ref (see content-ref.ts CONTRACT).
- */
+// Producer-side logic for the image-scrub topic, run inline by the ml-mirror anonymize pipeline. A block
+// can carry many inlined images and a Redis RTT per image dominates, so the API is batched: one Redis
+// round-trip dedups all advanced-route images in the message, one Kafka send posts the fresh ones. Each
+// image's team-scoped reference replaces its inline `rr_dataURL` (caller does the swap); the raw image is
+// posted only on its first sighting within the TTL, and the consumer later writes the scrubbed result to
+// S3. Redis presence means "posted recently" (dedup), not "scrubbed image exists in S3". Reserve/release/
+// produce are injected so this stays pure and unit-testable. Kept in sync with content-ref.ts CONTRACT.
 import { hashImageBytes, imageRef } from './content-ref'
 import { ImageScrubMetrics } from './metrics'
 
@@ -35,7 +26,7 @@ export interface ImageScrubEmitDeps {
      *  whether it was newly set (true = first sighting within the TTL, so post it; false = a recent or
      *  in-batch duplicate). */
     setBatchContentKeysRedis: (keys: string[], ttlSeconds: number) => Promise<boolean[]>
-    /** DEL a batch of content-hash keys in Redis — rolls the reservations back after a failed produce. */
+    /** DEL a batch of content-hash keys in Redis; rolls the reservations back after a failed produce. */
     deleteBatchContentKeysRedis: (keys: string[]) => Promise<void>
     /** Produce a batch of raw-image messages to the scrub topic; resolves once the broker acks them. */
     produceBatchImagesKafka: (messages: TopicMessage[]) => Promise<void>
@@ -50,12 +41,10 @@ export interface EmitResult {
 }
 
 /**
- * Dedup a message's images in one Redis round-trip and post the fresh ones in one Kafka send. Rolls
- * the reservations back if the produce fails, so images aren't lost (a stuck reservation would
- * otherwise dedup every later sighting until the TTL expired). Returns one result per input image,
- * in order; the caller substitutes each `ref` for its inline image. Throws if the produce fails after
- * rollback — the fail-closed ml-mirror then drops the message rather than record references whose
- * images never made it onto the topic.
+ * Dedup a message's images in one Redis round-trip, post the fresh ones in one Kafka send. Rolls the
+ * reservations back on produce failure so a stuck reservation can't dedup every later sighting until the
+ * TTL expires. Returns one result per input image, in order. Throws if the produce fails after rollback,
+ * so fail-closed ml-mirror drops the message rather than record references whose images never got posted.
  */
 export async function emitImagesForScrub(images: ImageInput[], deps: ImageScrubEmitDeps): Promise<EmitResult[]> {
     if (images.length === 0) {
@@ -64,7 +53,7 @@ export async function emitImagesForScrub(images: ImageInput[], deps: ImageScrubE
     const refs = images.map((img) => imageRef(img.teamId, hashImageBytes(img.bytes)))
     const ttl = deps.ttlSeconds ?? DEDUP_TTL_SECONDS
 
-    const fresh = await deps.setBatchContentKeysRedis(refs, ttl) // one round-trip
+    const fresh = await deps.setBatchContentKeysRedis(refs, ttl)
 
     const toPost: TopicMessage[] = []
     for (let i = 0; i < images.length; i++) {
@@ -74,10 +63,10 @@ export async function emitImagesForScrub(images: ImageInput[], deps: ImageScrubE
     }
     if (toPost.length > 0) {
         try {
-            await deps.produceBatchImagesKafka(toPost) // one send
+            await deps.produceBatchImagesKafka(toPost)
         } catch (err) {
-            // Roll back the reservations so later sightings retry; if the rollback itself fails (Redis
-            // down) the keys sit until the TTL and dedup those images away — meter it so it's visible.
+            // Roll back reservations so later sightings retry; if rollback itself fails (Redis down) the
+            // keys sit until the TTL and dedup those images away, so meter it to stay visible.
             await deps
                 .deleteBatchContentKeysRedis(toPost.map((m) => m.key))
                 .catch(() => ImageScrubMetrics.incrementReservationRollbackFailure())

@@ -45,9 +45,7 @@ export async function anonymizeParsedMessage(
         }
     }
 
-    // Advanced-route images: one batched emit to the scrub topic (one Redis round-trip + one send),
-    // then write each resolved reference back in place. Fail closed — a produce failure drops the
-    // message rather than record references whose images never reached the topic.
+    // Advanced-route images: one batched emit (one Redis round-trip + one send), then write each resolved reference back in place. Fail closed: a produce failure drops the whole message rather than record references whose images never reached the topic.
     if (ctx.imageScrub && teamId != null && imageScrubJobs.length > 0) {
         try {
             const results = await emitImagesForScrub(

@@ -1,5 +1,5 @@
-/** Prometheus counters + a minimal /metrics server for the consumer worker, so scrub failures and
- *  key/content mismatches are alertable rather than only visible as stdout log lines. */
+// Prometheus counters + a minimal /metrics server so scrub failures and key/content mismatches are
+// alertable, not just stdout log lines.
 import http from 'node:http'
 import { Counter, register } from 'prom-client'
 

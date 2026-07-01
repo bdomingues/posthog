@@ -1,17 +1,10 @@
 /* eslint-disable no-console -- worker logs to stdout */
 /**
- * Image-scrub consumer worker. Reads raw images off the scrub topic (key = `image:{team}:{hash}`,
- * value = raw image bytes), scrubs them, and batches the scrubbed bytes into shard objects + a parquet
- * index (hash -> shard, offset, length) so lookups are by content hash. See shard-store.ts + README.
+ * Image-scrub consumer worker: reads raw images off the scrub topic (key = `image:{team}:{hash}`),
+ * scrubs them, and batches the bytes into shard objects + a content-hash-keyed parquet index (see
+ * shard-store.ts + README). Stage 1 scrub is the sharp-only blur (blur.ts); Stage 2 swaps in advancedScrub.
  *
- * Offsets are committed manually only after a flush lands in S3 (at-least-once) — a failed write or a
- * crash replays the un-committed window; the reader dedups by hash, so a re-written image is harmless.
- *
- * Stage 1 scrub is the sharp-only downsample+blur (blur.ts) — no ML deps. Stage 2 swaps in advancedScrub.
- *
- *   npm run consume
- *
- * Run the dev stack first (Kafka/SeaweedFS). Env overrides in src/config.ts.
+ *   npm run consume   (needs the dev stack: Kafka + SeaweedFS; env overrides in config.ts)
  */
 import { Kafka } from 'kafkajs'
 
@@ -25,8 +18,7 @@ import { ImageShardStore, ScrubbedImage } from './shard-store.ts'
 
 /** Parse + verify + scrub one message into a ScrubbedImage, or null to skip it. */
 async function scrubImage(ref: string, raw: Buffer): Promise<ScrubbedImage | null> {
-    // Bind the key to the content: the index/S3 location comes from the key, so refuse bytes whose hash
-    // doesn't match the key's hash (a forged/corrupt key must not land under another team's reference).
+    // The S3 location derives from the key, so reject bytes whose hash doesn't match it: a forged key must not write under another team's reference.
     const parsed = parseImageRef(ref)
     if (!parsed || hashImageBytes(raw) !== parsed.hash) {
         ScrubMetrics.incMismatch()
@@ -53,8 +45,7 @@ async function main(): Promise<void> {
     await consumer.subscribe({ topic: cfg.topic, fromBeginning: false })
     console.log(`consuming ${cfg.topic} (group ${cfg.consumerGroup}) -> s3://${cfg.s3.bucket} @ ${cfg.s3.endpoint}`)
 
-    // Offsets not yet committed, accumulated across batches until a flush lands (next-to-consume per
-    // partition = highest processed + 1). autoCommit/autoResolve off so nothing commits ahead of a write.
+    // Un-committed offsets accumulated across batches, committed only after a flush lands; autoCommit/autoResolve off so nothing commits ahead of a write.
     const pending = new Map<number, { topic: string; partition: number; offset: string }>()
     await consumer.run({
         autoCommit: false,
@@ -72,8 +63,7 @@ async function main(): Promise<void> {
                             batcher.add(scrubbed)
                         }
                     } catch (e) {
-                        // Don't wedge the partition on one bad image; it's skipped (its reference resolves
-                        // to nothing), which is acceptable for the training mirror. Metered + offset advances.
+                        // One bad image is skipped (its reference resolves to nothing), acceptable for the mirror; metered, and the offset still advances.
                         ScrubMetrics.incFailed()
                         console.error(`${ref}: scrub failed: ${String(e)}`)
                     }
@@ -86,8 +76,7 @@ async function main(): Promise<void> {
                 await heartbeat()
             }
             if (batcher.shouldFlush(Date.now())) {
-                // Write the shards first; only then commit — a failed write throws here, leaving the
-                // window un-committed so Kafka replays it.
+                // Write shards first, commit only after: a failed write throws here, leaving the window un-committed for Kafka to replay.
                 await batcher.flush(Date.now())
                 if (pending.size > 0) {
                     await consumer.commitOffsets([...pending.values()])
@@ -98,8 +87,7 @@ async function main(): Promise<void> {
         },
     })
 
-    // Graceful shutdown: stop consuming and disconnect (finishes the in-flight batch). Any buffered but
-    // un-flushed images have un-committed offsets, so they simply replay on restart — no explicit flush.
+    // Graceful shutdown: disconnect finishes the in-flight batch; buffered-but-unflushed images have un-committed offsets, so they replay on restart.
     let shuttingDown = false
     for (const sig of ['SIGINT', 'SIGTERM'] as const) {
         process.on(sig, () => {

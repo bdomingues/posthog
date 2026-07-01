@@ -1,8 +1,6 @@
-/**
- * Stage-1 scrub: downsample + gaussian blur, ported from nodejs/.../anonymize/blur.ts so the mirror's
- * baseline matches what the inline anonymizer already produces. Pure sharp (libvips) — no ML deps —
- * so the Stage-1 consumer image stays lean. Stage 2 swaps this for advancedScrub in scrub.ts.
- */
+// Stage-1 scrub: downsample + gaussian blur, kept matching nodejs/.../anonymize/blur.ts so the mirror's
+// baseline equals the inline anonymizer's. Pure sharp (libvips), no ML deps, to keep the consumer image
+// lean; Stage 2 swaps this for advancedScrub in scrub.ts.
 import sharp from 'sharp'
 
 const DOWNSAMPLE_RATIO = 0.12
@@ -17,7 +15,6 @@ function targetDims(w: number, h: number): [number, number] {
     return [Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))]
 }
 
-/** One image's whole Stage-1 job: decode -> downsample -> blur -> re-encode. */
 export async function blurOnly(input: Buffer): Promise<Buffer> {
     const meta = await sharp(input, { limitInputPixels: LIMIT_INPUT_PIXELS }).metadata()
     const [tw, th] = targetDims(meta.width ?? 1, meta.height ?? 1)

@@ -1,13 +1,13 @@
-/** S3 helpers plus a topic-ensure for the consumer worker (and the local produce CLI). Producer-side
- *  Redis dedup + Kafka producing live in the ml-mirror pipeline (nodejs), not here — the consumer only
- *  reads already-routed images off the topic and writes the scrubbed result to S3. */
+// S3 helpers + topic-ensure for the consumer worker and local produce CLI. Producer-side Redis dedup +
+// Kafka producing live in the nodejs ml-mirror pipeline; the consumer only reads routed images off the
+// topic and writes the scrubbed result to S3.
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import type { Kafka } from 'kafkajs'
 
 import type { Config } from './config.ts'
 
-/** Idempotently create the topic so a fresh local stack works without editing the dev compose.
- *  Lists first so a pre-existing topic doesn't log a broker "already exists" error. */
+/** Idempotently create the topic so a fresh local stack works without editing the dev compose; lists
+ *  first so a pre-existing topic doesn't log a broker "already exists" error. */
 export async function ensureTopic(kafka: Kafka, topic: string): Promise<void> {
     const admin = kafka.admin()
     await admin.connect()
@@ -27,8 +27,8 @@ export function makeS3(cfg: Config): S3Client {
         endpoint: cfg.s3.endpoint,
         region: cfg.s3.region,
         forcePathStyle: true, // required for SeaweedFS / MinIO
-        // Use static keys only when both are provided (local dev); otherwise omit them so the SDK's
-        // default credential chain resolves the IRSA role in-cluster — never fall back to dev creds.
+        // Static keys only when both are set (local dev); else omit so the SDK's default chain resolves
+        // the in-cluster IRSA role, never falling back to dev creds.
         ...(accessKeyId && secretAccessKey ? { credentials: { accessKeyId, secretAccessKey } } : {}),
     })
 }
@@ -40,7 +40,6 @@ export async function ensureBucket(s3: S3Client, bucket: string): Promise<void> 
     } catch (e) {
         const code = (e as { name?: string }).name ?? ''
         if (!/BucketAlreadyOwnedByYou|BucketAlreadyExists/.test(code)) {
-            // already-exists is fine; anything else is a real problem
             const status = (e as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
             if (status !== 409) {
                 throw e

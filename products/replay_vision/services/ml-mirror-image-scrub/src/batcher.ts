@@ -1,7 +1,4 @@
 import { ScrubMetrics } from './metrics.ts'
-/** Accumulates scrubbed images across Kafka batches and flushes them as shard + index objects once the
- *  buffer is large enough (images or bytes) or old enough. Mirrors the ml-mirror block-metadata batcher.
- *  The caller commits Kafka offsets only after a flush succeeds, so a failed write replays (at-least-once). */
 import { ImageShardStore, ScrubbedImage } from './shard-store.ts'
 
 export interface BatcherOptions {
@@ -10,6 +7,8 @@ export interface BatcherOptions {
     flushIntervalMs: number
 }
 
+/** Buffers scrubbed images and flushes them to shard+index objects; offsets are committed only after a
+ *  flush lands, so a failed write replays (at-least-once). */
 export class ImageBatcher {
     private buffer: ScrubbedImage[] = []
     private bufferBytes = 0
@@ -39,12 +38,9 @@ export class ImageBatcher {
         return this.buffer.length > 0 && nowMs - this.lastFlushMs >= this.options.flushIntervalMs
     }
 
-    /**
-     * Group the buffered images by team and write one shard + index per team. Snapshots and clears the
-     * buffer up front so images added concurrently aren't dropped; throws if a write fails (the caller
-     * then doesn't commit offsets, so Kafka redelivers those images — the buffered snapshot being lost
-     * is safe because its offsets were never committed).
-     */
+    /** Group the buffered images by team and write one shard + index per team. Snapshots and clears the
+     *  buffer up front so concurrent adds aren't dropped; throws if a write fails, and since the caller
+     *  then doesn't commit offsets, Kafka redelivers those images (the lost snapshot is safe, uncommitted). */
     public async flush(nowMs: number): Promise<void> {
         this.lastFlushMs = nowMs
         if (this.buffer.length === 0) {

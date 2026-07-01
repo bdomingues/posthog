@@ -10,8 +10,7 @@ import { BLANK_IMAGE_DATA_URI, blurImageBytes, isImageDataUri } from './blur'
 import { ScrubContext } from './config'
 import { scrubUrl } from './url'
 
-// Bound how much a single message can hand off to the scrub topic, so an outlier session with many
-// large inlined images can't pin unbounded memory across the emit. Overflow falls back to cheap blur.
+// Bound per-message hand-off to the topic so an outlier session with many large images can't pin unbounded memory across the emit; overflow falls back to cheap blur.
 const MAX_ADVANCED_IMAGES_PER_MESSAGE = 64
 const MAX_ADVANCED_BYTES_PER_MESSAGE = 32 * 1024 * 1024 // 32 MB
 
@@ -48,11 +47,10 @@ export function hasMediaSrcAttr(attrs: Record<string, unknown>): boolean {
     return MEDIA_SRC_ATTRS.some((name) => Object.prototype.hasOwnProperty.call(attrs, name))
 }
 
-/** Raw bytes of an image data URI's base64 payload, or null if it isn't a base64 image data URI. We
- *  don't validate the image FORMAT here on purpose: the consumer's sharp decode is the single authority
- *  on "is this a real image" (it throws + skips otherwise). Magic-byte filtering would risk false-
- *  rejecting a real but unlisted format (e.g. AVIF), which returns false below and leaves the raw image
- *  inline — a PII leak, the wrong failure direction for a scrubber. */
+/** Raw bytes of an image data URI's base64 payload, or null if not a base64 image data URI. Format is
+ *  NOT validated here on purpose: magic-byte filtering would risk false-rejecting a real but unlisted
+ *  format (e.g. AVIF), which leaves the raw image inline (a PII leak); the consumer's sharp decode is
+ *  the authority on "real image" instead. */
 function imageDataUriBytes(dataUri: string): Buffer | null {
     const comma = dataUri.indexOf(',')
     if (comma < 0) {
@@ -65,10 +63,9 @@ function imageDataUriBytes(dataUri: string): Buffer | null {
     return Buffer.from(dataUri.slice(comma + 1), 'base64')
 }
 
-/** Intrinsic pixel dimensions read straight from the image header (sync, header-only). Returns
- *  undefined if the header can't be read, which routes the image to scrubbing (fail-closed) — an
- *  undecodable or crafted image is never passed through unredacted. Deliberately NOT the rrweb
- *  width/height attrs: those are the display size (spoofable, and a large image can be shown at 16px). */
+/** Intrinsic pixel dimensions from the image header (sync, header-only), or undefined if unreadable,
+ *  which routes to scrubbing (fail-closed) so a crafted/undecodable image is never passed through. NOT
+ *  the rrweb width/height attrs: those are display size (spoofable; a large image can be shown at 16px). */
 function imageDimensions(bytes: Buffer): { width: number; height: number } | undefined {
     try {
         const { width, height } = imageSize(bytes)
@@ -78,15 +75,9 @@ function imageDimensions(bytes: Buffer): { width: number; height: number } | und
     }
 }
 
-/**
- * Scrub one inlined image in `attrs[name]` by the routing policy:
- *  - advancedScrub (static <img>/media raster, ml-mirror ports present): fail-safe placeholder now,
- *    then collect the raw bytes for the batched emit to the scrub topic; the reference is written in
- *    place once the emit resolves (consumer scrubs -> S3).
- *  - cheapBlur (canvas, oversize, or ports absent): the existing in-process downsample+blur.
- *  - passthrough (tiny): leave untouched.
- * Returns whether it acted on the attribute.
- */
+/** Route one inlined image in `attrs[name]` per getScrubMethodForImage: advancedScrub collects the
+ *  bytes for the topic (placeholder now, reference written in place after the emit), cheapBlur defers an
+ *  in-process blur, passthrough leaves it. Returns whether it acted. */
 function scrubInlineImage(
     ctx: ScrubContext,
     attrs: Record<string, unknown>,
@@ -127,8 +118,7 @@ function scrubInlineImage(
         })
         return true
     }
-    // cheapBlur: in-process blur — for canvas/oversize, when ports/team are absent, or over the
-    // per-message cap. Reuses the already-decoded bytes (no second base64 decode).
+    // cheapBlur: canvas/oversize, ports/team absent, or over the per-message cap. Reuses the decoded bytes (no second base64 decode).
     attrs[name] = placeholder
     ctx.blurJobs?.push(async () => {
         const blurred = await blurImageBytes(bytes)

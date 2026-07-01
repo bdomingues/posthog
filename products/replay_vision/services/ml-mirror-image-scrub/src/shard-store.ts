@@ -1,22 +1,12 @@
-/**
- * Writes scrubbed images as batched shard objects + a parquet index, so lookups are by content hash
- * (not by replay id). One shard + one index parquet per team per flush. Mirrors the ml-mirror
- * block-metadata parquet store.
- *
- * Layout (team_id-partitioned):
- *   scrubbed-images/team_id={team}/shards/{node}-{ts}-{seq}.bin      raw concat of scrubbed image bytes
- *   scrubbed-images/team_id={team}/index/{node}-{ts}-{seq}.parquet   rows: hash, shard, offset, length
- *
- * Read contract: resolve `image:{team}:{hash}` by querying the team's index for `hash`, then
- * range-GET `shard` bytes [offset, offset+length). See README.
- */
+// Scrubbed images written as batched shards + a parquet index, keyed by content hash (not replay id);
+// one shard + index per team per flush. Read `image:{team}:{hash}` via the team's index (hash -> shard,
+// offset, length) then range-GET the shard bytes. See README.
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { ParquetSchema, ParquetWriter } from '@dsnp/parquetjs'
 import { randomUUID } from 'node:crypto'
 import { Writable } from 'node:stream'
 
-/** A scrubbed image awaiting shard write. `hash` is the ORIGINAL content hash (the index key, from the
- *  reference); `bytes` are the SCRUBBED image bytes stored in the shard. */
+/** `hash` is the original content hash (index key, from the reference); `bytes` are the scrubbed bytes. */
 export interface ScrubbedImage {
     teamId: number
     hash: string
@@ -71,9 +61,9 @@ export class ImageShardStore {
         this.nodeId = nodeId || process.env.HOSTNAME || randomUUID().slice(0, 8)
     }
 
-    /** Write one team's images as ONE shard blob + ONE parquet index. Throws on failure so the caller
-     *  replays from Kafka (at-least-once); a redelivery just writes a fresh shard (the reader dedups by
-     *  hash), and an orphaned shard from a mid-write failure is invisible (no index points at it). */
+    /** One team's images as one shard blob + one parquet index. Throws on failure so the caller replays
+     *  from Kafka; redelivery writes a fresh shard (reader dedups by hash), and a mid-write orphaned shard
+     *  is invisible since no index points at it. */
     public async writeTeam(teamId: number, images: ScrubbedImage[]): Promise<{ shard: string; bytes: number }> {
         this.seq += 1
         const stamp = `${this.nodeId}-${Date.now()}-${this.seq}`

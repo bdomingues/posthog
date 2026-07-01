@@ -128,9 +128,7 @@ export class IngestionSessionReplayMlMirrorServer implements NodeServer {
             const redis = buildSessionReplayRedisV2(this.config)
             const producer = this.producerRegistry.getProducer(INGESTION_SESSIONREPLAY_PRODUCER)
             scrubContext.imageScrub = {
-                // SET NX EX every key in one pipelined round-trip; 'OK' = fresh (post it), nil = duplicate.
-                // No failOpen — a Redis error throws, so the fail-closed pipeline drops the message rather
-                // than record references for images it never confirmed as posted.
+                // SET NX EX every key in one pipelined round-trip; 'OK' = fresh (post it), nil = duplicate. No failOpen: a Redis error throws, so the fail-closed pipeline drops the message rather than record references for images it never confirmed as posted.
                 setBatchContentKeysRedis: async (keys, ttlSeconds) => {
                     const raw = await redis.usePipeline({ name: 'image_scrub_reserve' }, (pipeline) => {
                         for (const key of keys) {
