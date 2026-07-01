@@ -13,33 +13,16 @@ import * as tf from '@tensorflow/tfjs'
 import * as nsfw from 'nsfwjs'
 import sharp from 'sharp'
 
+import { BLANK_PNG, blurOnly } from './blur.ts'
 import { type DbnetModel, detectTextDbnet, loadDbnet } from './dbnet.ts'
 import { type Src, decodeSrc, srcSharp } from './src-image.ts'
 import { type YunetModel, detectFacesYunet, loadYunet } from './yunet.ts'
 
 export type TextMode = 'heuristic' | 'dbnet'
 
-// --- baseline blur (ported from anonymize/blur.ts) ----------------------------------------------
-const DOWNSAMPLE_RATIO = 0.12
-const BLUR_SIGMA = 2.34
-const MAX_LONG_SIDE = 96
-
-export const BLANK_PNG = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-    'base64'
-)
-
-function targetDims(w: number, h: number): [number, number] {
-    const scale = Math.min(DOWNSAMPLE_RATIO, MAX_LONG_SIDE / Math.max(w, h))
-    return [Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))]
-}
-
-/** The current worker's whole job for one image: decode -> downsample -> blur -> re-encode. */
-export async function blurOnly(input: Buffer): Promise<Buffer> {
-    const meta = await sharp(input).metadata()
-    const [tw, th] = targetDims(meta.width ?? 1, meta.height ?? 1)
-    return sharp(input).resize(tw, th, { fit: 'fill' }).blur(BLUR_SIGMA).png().toBuffer()
-}
+// blurOnly/BLANK_PNG live in the ML-dep-free blur.ts (what the Stage-1 image ships); re-exported here
+// so the eval harness and benchmarks can compare the baseline against advancedScrub from one module.
+export { BLANK_PNG, blurOnly }
 
 // --- models -------------------------------------------------------------------------------------
 export interface Models {

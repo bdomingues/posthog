@@ -1,22 +1,23 @@
 /* eslint-disable no-console -- worker logs to stdout */
 /**
  * Image-scrub consumer worker. Reads raw images off the scrub topic (key = `image:{team}:{hash}`,
- * value = raw image bytes), scrubs them (NSFW gate + face mosaic + text solid-fill), and writes the
- * result to S3 under the reference. Idempotent: skips images already present in S3 (HEAD-then-skip),
- * so a redelivery or a duplicate that slipped past producer dedup just no-ops.
+ * value = raw image bytes), scrubs them, and writes the result to S3 under the reference. Idempotent:
+ * skips images already present in S3 (HEAD-then-skip), so a redelivery or a duplicate that slipped
+ * past producer dedup just no-ops.
+ *
+ * Stage 1 scrub is the sharp-only downsample+blur (blur.ts) — no ML deps, so this worker's image
+ * stays lean. Stage 2 swaps in advancedScrub (NSFW gate + face mosaic + text solid-fill) from scrub.ts.
  *
  *   npm run consume
  *
  * Run the dev stack first (Kafka/Redis/SeaweedFS). Env overrides in src/config.ts.
  */
-import './polyfill.ts'
-
 import { Kafka } from 'kafkajs'
 
+import { blurOnly } from './blur.ts'
 import { ensureBucket, ensureTopic, makeS3, s3Exists, s3Put } from './clients.ts'
 import { loadConfig } from './config.ts'
 import { isImageRef, s3KeyForRef } from './content-ref.ts'
-import { type Models, advancedScrub, loadModels } from './scrub.ts'
 
 /** Run fn over items with at most `concurrency` in flight — bounds CPU (scrub) and S3 connections. */
 async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -29,28 +30,21 @@ async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Prom
     await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()))
 }
 
-async function handle(
-    models: Models,
-    s3: ReturnType<typeof makeS3>,
-    bucket: string,
-    ref: string,
-    bytes: Buffer
-): Promise<string> {
+async function handle(s3: ReturnType<typeof makeS3>, bucket: string, ref: string, bytes: Buffer): Promise<string> {
     const key = s3KeyForRef(ref)
     if (await s3Exists(s3, bucket, key)) {
         return 'skip (exists)'
     }
-    const { out, t } = await advancedScrub(bytes, models)
+    const out = await blurOnly(bytes)
     await s3Put(s3, bucket, key, out)
-    return `scrubbed ${t.totalMs.toFixed(0)}ms -> ${key}`
+    return `blurred -> ${key}`
 }
 
 async function main(): Promise<void> {
     const cfg = loadConfig()
-    const models = await loadModels()
     const s3 = makeS3(cfg)
     await ensureBucket(s3, cfg.s3.bucket)
-    const kafka = new Kafka({ clientId: 'replay-image-scrub', brokers: cfg.kafkaBrokers })
+    const kafka = new Kafka({ clientId: 'ml-mirror-image-scrub', brokers: cfg.kafkaBrokers })
     await ensureTopic(kafka, cfg.topic)
 
     const consumer = kafka.consumer({ groupId: cfg.consumerGroup })
@@ -70,7 +64,7 @@ async function main(): Promise<void> {
                 }
                 if (job.ref && isImageRef(job.ref) && job.bytes) {
                     try {
-                        console.log(`${job.ref}: ${await handle(models, s3, cfg.s3.bucket, job.ref, job.bytes)}`)
+                        console.log(`${job.ref}: ${await handle(s3, cfg.s3.bucket, job.ref, job.bytes)}`)
                     } catch (e) {
                         // Don't wedge the partition on one bad image; it stays unscrubbed (reference
                         // resolves to nothing), which is acceptable for the training mirror.

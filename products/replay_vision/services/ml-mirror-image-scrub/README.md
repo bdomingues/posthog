@@ -1,6 +1,15 @@
-# @posthog/replay-image-scrub (experimental)
+# @posthog/ml-mirror-image-scrub
 
-Image scrubber for the session-replay ML-training mirror. Given an inlined replay image it:
+Consumer worker that scrubs inlined images for the session-replay ML-training mirror and writes them
+to S3. It ships in two stages:
+
+- **Stage 1 (this deployable):** a lean sharp-only downsample+blur (`src/blur.ts`), matching what the
+  inline anonymizer already produces. No ML deps, so the worker image stays small. This proves the
+  plumbing — its own image, the Kafka topic, batched Redis dedup, and batched S3 writes.
+- **Stage 2:** swap the consumer's `blurOnly` for `advancedScrub` (`src/scrub.ts`) — the full native
+  ML scrub below — and promote the ML deps from `devDependencies` to `dependencies`.
+
+The Stage-2 scrub, given an inlined replay image:
 
 1. **NSFW/gore gate**: if the image is explicit, it collapses to a 1x1 blank.
 2. **Face mosaic**: every detected face is mosaicked (the rest of the frame, e.g. clothing, is kept).
@@ -62,17 +71,21 @@ benchmarks, the eval harness, local CLIs, data setup). Production never imports 
 
 ```text
 src/  (production — ships)
+  consumer.ts     consumer worker: read topic -> scrub -> write S3 (batched)
+  blur.ts         Stage-1 scrub: sharp-only downsample+blur (no ML deps)
+  clients.ts      real ports: Redis (pipeline), Kafka, S3
+  config.ts       env-driven runtime config
   routing.ts      producer: decide passthrough / cheap-blur / advanced per image
   content-ref.ts  producer: team-scoped content reference image:{team}:{hash}
   producer.ts     producer: batched Redis dedup + post raw images to the scrub topic
-  consumer.ts     consumer worker: read topic -> scrub -> write S3 (batched)
-  clients.ts      real ports: Redis (pipeline), Kafka, S3
-  config.ts       env-driven runtime config
-  scrub.ts        scrub pipeline: decode-once, NSFW gate, face mosaic + text solid-fill
-  yunet.ts        YuNet face detector (ONNX)
-  dbnet.ts        DBNet text-region detector (ONNX)
-  src-image.ts    decode the source once to raw RGB, shared across stages
-  polyfill.ts     Node 23+ util shims so tfjs-node loads
+  scrub.ts        Stage-2 scrub pipeline: decode-once, NSFW gate, face mosaic + text solid-fill
+  yunet.ts        Stage-2 YuNet face detector (ONNX)
+  dbnet.ts        Stage-2 DBNet text-region detector (ONNX)
+  src-image.ts    Stage-2 decode the source once to raw RGB, shared across stages
+  polyfill.ts     Stage-2 Node 23+ util shims so tfjs-node loads
+
+  scrub.ts/yunet.ts/dbnet.ts/src-image.ts/polyfill.ts are Stage-2: their ML deps are devDependencies,
+  so they are excluded from the Stage-1 --prod image and are exercised only by the dev/ eval harness.
 
 dev/  (non-production — tests + utilities)
   producer.test.ts routing.test.ts   unit tests (npm run test:unit)
@@ -138,12 +151,17 @@ scene text.
 
 ## Packaging / deployment
 
-This is a **standalone package, deliberately not in the root pnpm workspace**, so its heavy native ML
-deps stay out of the main plugin-server image. The plugin-server is one shared image across most
-deployments, so anything in `nodejs/package.json` ships to every pod.
+This worker is owned by the `replay_vision` product, so it lives under
+`products/replay_vision/services/` (a service the product deploys — see `docs/internal/monorepo-layout.md`).
+It is a **standalone package, deliberately not registered in `pnpm-workspace.yaml`**: it has no
+`workspace:*` deps, so keeping it out of the workspace keeps its deps (especially the Stage-2 ML
+libraries) out of the root lockfile and out of the shared plugin-server image (`nodejs/package.json`
+ships to every pod). It has its own `pnpm-lock.yaml`, and `Dockerfile.ml-mirror-image-scrub` (at the
+repo root) installs `--prod --frozen-lockfile` against it — so only the Stage-1 `dependencies`
+(sharp, kafkajs, ioredis, aws-sdk, tsx) land in the image, not the Stage-2 ML `devDependencies`.
 
-Productionization (mirrors `Dockerfile.recording-rasterizer`, the existing per-workflow replay image):
+The image builds and deploys via `.github/workflows/ci-ml-mirror-image-scrub-container.yml`, mirroring
+`recording-rasterizer` (Depot build -> ECR/ghcr push -> `repository_dispatch` to the charts repo).
 
-1. Promote to a workspace package (add to `pnpm-workspace.yaml`) so deps are `pnpm --filter`-installable.
-2. Add a dedicated Dockerfile + entrypoint that consumes the image-scrub Kafka topic.
-3. Bake the ONNX models into the image (don't download at runtime); keep NSFW/face/text inference native.
+Stage 2 (later): swap `blurOnly` -> `advancedScrub` in `consumer.ts`, move the ML libs to
+`dependencies`, and bake the ONNX models into the image (don't download at runtime).

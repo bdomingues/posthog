@@ -1,6 +1,6 @@
 node_modules/
 package-lock.json
-pnpm-lock.yaml
+# pnpm-lock.yaml IS committed — the Dockerfile installs --frozen-lockfile for reproducible images.
 # Downloaded by `npm run setup` — not committed (see binaries/data decision in README).
 models/
 test-data/
