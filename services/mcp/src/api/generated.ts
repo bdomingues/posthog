@@ -31842,15 +31842,6 @@ export namespace Schemas {
       results: MaxCoreMemory[];
     }
 
-    export interface PaginatedMessageAssetList {
-      /** @nullable */
-      next?: string | null;
-      /** @nullable */
-      previous?: string | null;
-      count?: number;
-      results?: MessageAsset[];
-    }
-
     export interface PaginatedMessageCategoryList {
       count: number;
       /** @nullable */
