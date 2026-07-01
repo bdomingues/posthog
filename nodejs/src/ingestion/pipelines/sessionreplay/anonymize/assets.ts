@@ -89,6 +89,12 @@ function scrubInlineImage(
     if (typeof value !== 'string' || !isImageDataUri(value)) {
         return false
     }
+    // SVGs always pass through untouched: they're vector UI assets (icons, logos, chrome), not the
+    // photographic raster the face/blur scrubbers target, and rasterizing one to blur it would destroy
+    // high-signal vector training data while protecting nothing those scrubbers are for.
+    if (/^data:image\/svg/i.test(value)) {
+        return false
+    }
     const bytes = imageDataUriBytes(value)
     if (bytes === null) {
         return false

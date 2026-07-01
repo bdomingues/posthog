@@ -103,6 +103,19 @@ describe('anonymize/assets', () => {
             expect(attrs.rr_dataURL).toBe(TINY_PNG) // untouched
         })
 
+        it('always passes an SVG through untouched, regardless of declared size', () => {
+            const { ctx, imageScrubJobs, blurJobs } = ctxWithPorts()
+            const svg = `data:image/svg+xml;base64,${Buffer.from(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="2000"><text>hi</text></svg>'
+            ).toString('base64')}`
+            const attrs: Record<string, unknown> = { rr_dataURL: svg }
+
+            expect(blurInlineImageAttr(ctx, attrs, 'rr_dataURL', 'img')).toBe(false)
+            expect(imageScrubJobs).toHaveLength(0)
+            expect(blurJobs).toHaveLength(0)
+            expect(attrs.rr_dataURL).toBe(svg) // vector asset, left as-is
+        })
+
         it('scrubs an undecodable image rather than passing it through (fail closed)', () => {
             // The size can't be read, so it must NOT be treated as tiny/passthrough — the raw bytes are
             // handed off to scrubbing, never left inline.
