@@ -15,7 +15,7 @@ export interface Config {
     s3: { endpoint: string; region: string; bucket: string; accessKeyId?: string; secretAccessKey?: string }
     // Buffer scrubbed images until any threshold trips, then write one shard + index per team. Bigger
     // shards = fewer, cheaper S3 writes; the interval bounds worst-case latency.
-    flush: { maxImages: number; maxBytes: number; intervalMs: number }
+    flush: { maxImages: number; maxBytes: number; flushIntervalMs: number }
 }
 
 export function loadConfig(): Config {
@@ -26,7 +26,7 @@ export function loadConfig(): Config {
         flush: {
             maxImages: Number(process.env.IMAGE_SCRUB_FLUSH_MAX_IMAGES ?? 1000),
             maxBytes: Number(process.env.IMAGE_SCRUB_FLUSH_MAX_BYTES ?? 128 * 1024 * 1024),
-            intervalMs: Number(process.env.IMAGE_SCRUB_FLUSH_INTERVAL_MS ?? 30_000),
+            flushIntervalMs: Number(process.env.IMAGE_SCRUB_FLUSH_INTERVAL_MS ?? 30_000),
         },
         // Read standard object-storage env so prod points at SESSION_RECORDING_V2_S3 / OBJECT_STORAGE_*,
         // not a hardcoded endpoint. Default to SeaweedFS; for a local MinIO-style `objectstorage` set

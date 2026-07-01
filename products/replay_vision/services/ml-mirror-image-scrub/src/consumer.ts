@@ -18,7 +18,9 @@ import { ImageShardStore, ScrubbedImage } from './shard-store.ts'
 
 /** Parse + verify + scrub one message into a ScrubbedImage, or null to skip it. */
 async function scrubImage(ref: string, raw: Buffer): Promise<ScrubbedImage | null> {
-    // The S3 location derives from the key, so reject bytes whose hash doesn't match it: a forged key must not write under another team's reference.
+    // Reject bytes whose hash doesn't match the key's: content integrity, so the object a reference points
+    // at always matches its content. Not a team-authorization check (the hash is content-only and unkeyed);
+    // a producer forging another team's key is out of scope, this is an internal producer-only topic.
     const parsed = parseImageRef(ref)
     if (!parsed || hashImageBytes(raw) !== parsed.hash) {
         ScrubMetrics.incMismatch()
@@ -47,6 +49,41 @@ async function main(): Promise<void> {
 
     // Un-committed offsets accumulated across batches, committed only after a flush lands; autoCommit/autoResolve off so nothing commits ahead of a write.
     const pending = new Map<number, { topic: string; partition: number; offset: string }>()
+
+    // Serialize flushes so the idle timer and eachBatch never overlap. Each run snapshots pending in the
+    // same synchronous tick as the buffer swap (batcher.flush clears the buffer before its first await), so
+    // a committed offset always covers a flushed image; offsets that arrive mid-flush stay pending.
+    let flushChain: Promise<unknown> = Promise.resolve()
+    function flushAndCommit(): Promise<void> {
+        const run = flushChain.then(async () => {
+            const offsets = [...pending.values()]
+            await batcher.flush(Date.now()) // throws on write failure → no commit → Kafka replays
+            if (offsets.length === 0) {
+                return
+            }
+            await consumer.commitOffsets(offsets)
+            for (const o of offsets) {
+                if (pending.get(o.partition)?.offset === o.offset) {
+                    pending.delete(o.partition)
+                }
+            }
+        })
+        flushChain = run.catch(() => {})
+        return run
+    }
+
+    // eachBatch only fires on new traffic, so without this a partition that buffers then goes quiet would
+    // hold those images until traffic resumes. shouldFlush gates on the same interval/size thresholds.
+    const flushTimer = setInterval(
+        () => {
+            if (batcher.shouldFlush(Date.now())) {
+                flushAndCommit().catch((e) => console.error(`periodic flush failed: ${String(e)}`))
+            }
+        },
+        Math.max(1000, cfg.flush.flushIntervalMs)
+    )
+    flushTimer.unref?.()
+
     await consumer.run({
         autoCommit: false,
         eachBatchAutoResolve: false,
@@ -76,12 +113,7 @@ async function main(): Promise<void> {
                 await heartbeat()
             }
             if (batcher.shouldFlush(Date.now())) {
-                // Write shards first, commit only after: a failed write throws here, leaving the window un-committed for Kafka to replay.
-                await batcher.flush(Date.now())
-                if (pending.size > 0) {
-                    await consumer.commitOffsets([...pending.values()])
-                    pending.clear()
-                }
+                await flushAndCommit()
                 await heartbeat()
             }
         },
@@ -96,6 +128,7 @@ async function main(): Promise<void> {
             }
             shuttingDown = true
             console.log(`${sig} received, draining...`)
+            clearInterval(flushTimer)
             const force = setTimeout(() => process.exit(1), 30_000)
             consumer
                 .disconnect()

@@ -22,14 +22,14 @@ const img = (teamId: number, hash: string, bytes = 10): ScrubbedImage => ({
 
 function batcher(
     store: FakeStore,
-    overrides: Partial<{ maxImages: number; maxBytes: number; intervalMs: number }> = {}
+    overrides: Partial<{ maxImages: number; maxBytes: number; flushIntervalMs: number }> = {}
 ): ImageBatcher {
     return new ImageBatcher(
         store as unknown as ImageShardStore,
         {
             maxImages: overrides.maxImages ?? 1000,
             maxBytes: overrides.maxBytes ?? 1e9,
-            flushIntervalMs: overrides.intervalMs ?? 30_000,
+            flushIntervalMs: overrides.flushIntervalMs ?? 30_000,
         },
         0
     )
@@ -64,7 +64,7 @@ describe('ImageBatcher', () => {
 
     it('flushes on the interval only when there is something buffered', () => {
         const store = new FakeStore()
-        const b = batcher(store, { intervalMs: 1000 })
+        const b = batcher(store, { flushIntervalMs: 1000 })
         expect(b.shouldFlush(5000)).toBe(false) // empty, no flush
         b.add(img(1, 'a'))
         expect(b.shouldFlush(500)).toBe(false) // not old enough

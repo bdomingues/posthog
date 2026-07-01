@@ -46,6 +46,27 @@ import {
     buildSessionReplayRedisV2,
 } from './ingestion-session-replay-server'
 
+// The image-scrub emit runs inline in the anonymize path, so a stalled Redis or broker would block the
+// message indefinitely. A rejection instead fails the message closed (dropped) via the pipeline's catch.
+const IMAGE_SCRUB_REDIS_TIMEOUT_MS = 2_000
+const IMAGE_SCRUB_PRODUCE_TIMEOUT_MS = 10_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+        promise.then(
+            (value) => {
+                clearTimeout(timer)
+                resolve(value)
+            },
+            (error) => {
+                clearTimeout(timer)
+                reject(error)
+            }
+        )
+    })
+}
+
 /** Full config for an ML mirror deployment: the primary replay config plus ML knobs. */
 export type IngestionSessionReplayMlMirrorServerConfig = IngestionSessionReplayServerConfig & MlMirrorConfig
 
@@ -128,32 +149,50 @@ export class IngestionSessionReplayMlMirrorServer implements NodeServer {
             const redis = buildSessionReplayRedisV2(this.config)
             const producer = this.producerRegistry.getProducer(INGESTION_SESSIONREPLAY_PRODUCER)
             scrubContext.imageScrub = {
-                // SET NX EX every key in one pipelined round-trip; 'OK' = fresh (post it), nil = duplicate. No failOpen: a Redis error throws, so the fail-closed pipeline drops the message rather than record references for images it never confirmed as posted.
+                // SET NX EX every key in one pipelined round-trip; 'OK' = fresh (post it), nil = duplicate.
                 setBatchContentKeysRedis: async (keys, ttlSeconds) => {
-                    const raw = await redis.usePipeline({ name: 'image_scrub_reserve' }, (pipeline) => {
-                        for (const key of keys) {
-                            pipeline.set(key, '1', 'EX', ttlSeconds, 'NX')
+                    const raw = await withTimeout(
+                        redis.usePipeline({ name: 'image_scrub_reserve' }, (pipeline) => {
+                            for (const key of keys) {
+                                pipeline.set(key, '1', 'EX', ttlSeconds, 'NX')
+                            }
+                        }),
+                        IMAGE_SCRUB_REDIS_TIMEOUT_MS,
+                        'image_scrub_reserve'
+                    )
+                    return (raw ?? []).map(([err, res]) => {
+                        // A per-key failure is not a duplicate: reading it as one would write a reference for an image we never posted. Throw so the emit fails closed and the message is dropped.
+                        if (err) {
+                            throw err
                         }
+                        return res === 'OK'
                     })
-                    return (raw ?? []).map(([err, res]) => !err && res === 'OK')
                 },
                 deleteBatchContentKeysRedis: async (keys) => {
-                    await redis.usePipeline({ name: 'image_scrub_release' }, (pipeline) => {
-                        for (const key of keys) {
-                            pipeline.del(key)
-                        }
-                    })
+                    await withTimeout(
+                        redis.usePipeline({ name: 'image_scrub_release' }, (pipeline) => {
+                            for (const key of keys) {
+                                pipeline.del(key)
+                            }
+                        }),
+                        IMAGE_SCRUB_REDIS_TIMEOUT_MS,
+                        'image_scrub_release'
+                    )
                 },
                 // One produce per fresh image; resolves once the broker acks them all.
                 produceBatchImagesKafka: async (messages) => {
-                    await Promise.all(
-                        messages.map((m) =>
-                            producer.produce({
-                                topic: KAFKA_SESSION_REPLAY_IMAGE_SCRUB,
-                                key: Buffer.from(m.key),
-                                value: m.value,
-                            })
-                        )
+                    await withTimeout(
+                        Promise.all(
+                            messages.map((m) =>
+                                producer.produce({
+                                    topic: KAFKA_SESSION_REPLAY_IMAGE_SCRUB,
+                                    key: Buffer.from(m.key),
+                                    value: m.value,
+                                })
+                            )
+                        ),
+                        IMAGE_SCRUB_PRODUCE_TIMEOUT_MS,
+                        'image_scrub_produce'
                     )
                 },
             }
