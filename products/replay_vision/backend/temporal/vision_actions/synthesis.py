@@ -188,11 +188,14 @@ def _fetch_observations(team: Team, action: VisionAction, run: VisionActionRun) 
         output = scanner_result.get("model_output") if isinstance(scanner_result, dict) else None
         if not isinstance(output, dict):
             continue
-        summary = output.get("summary")
-        if not isinstance(summary, str) or not summary.strip():
+        # Summarizers emit `summary`; monitor/classifier/scorer emit `reasoning` (+ verdict/tags/score).
+        # Fall back to reasoning so a group summary works on any scanner type, matching the on-demand
+        # Max summary tool (_fetch_and_format) — otherwise a non-summarizer action skips as empty.
+        text = output.get("summary") or output.get("reasoning")
+        if not isinstance(text, str) or not text.strip():
             continue
         title = output.get("title") if isinstance(output.get("title"), str) else None
-        clean = _EVENT_ID_CITATION_RE.sub("", summary).strip()
+        clean = _EVENT_ID_CITATION_RE.sub("", text).strip()
         lines.append(f"- ({created_at:%Y-%m-%d}) {f'{title}: ' if title else ''}{clean}")
         # Recorded in lockstep with `lines`: only observations whose summary was actually included.
         observation_ids.append(str(observation_id))

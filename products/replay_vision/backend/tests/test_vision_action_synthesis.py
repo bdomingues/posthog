@@ -241,6 +241,26 @@ class TestVisionActionSynthesis(BaseTest):
         result = self._synthesize(action, run)
         self.assertEqual(result.observation_count, 1)
 
+    def test_summarizes_reasoning_when_no_summary(self) -> None:
+        # Non-summarizer scanners (monitor/classifier/scorer) emit `reasoning`, not `summary`. The group
+        # summary must fall back to reasoning so those actions don't skip as empty.
+        ReplayObservation.objects.create(
+            scanner=self.scanner,
+            session_id="classified",
+            scanner_snapshot=snapshot_for(self.scanner),
+            triggered_by=ObservationTrigger.SCHEDULE,
+            status=ObservationStatus.SUCCEEDED,
+            completed_at=timezone.now(),
+            scanner_result={"model_output": {"reasoning": "user abandoned at the payment step", "tags": ["abandoned"]}},
+        )
+        action = self._action()
+        run = self._run_for(action)
+
+        result = self._synthesize(action, run)
+
+        self.assertEqual(result.status, SynthesisStatus.SYNTHESIZED)
+        self.assertEqual(result.observation_count, 1)
+
     def test_external_links_are_stripped(self) -> None:
         self._observation("something")
         action = self._action()
