@@ -2,6 +2,7 @@ import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 
 import { initializePrometheusLabels } from '~/common/api/router'
 import { defaultConfig, overrideConfigWithEnv } from '~/common/config/config'
+import { KAFKA_SESSION_REPLAY_IMAGE_SCRUB } from '~/common/config/kafka-topics'
 import { KafkaProducerRegistry } from '~/common/outputs/kafka-producer-registry'
 import { PostgresRouter } from '~/common/utils/db/postgres'
 import { parseJSON } from '~/common/utils/json-parse'
@@ -20,6 +21,10 @@ import {
     SessionRecordingIngesterCollaborators,
 } from '~/ingestion/pipelines/sessionreplay/consumer'
 import { MlMirrorConfig, getDefaultMlMirrorConfig } from '~/ingestion/pipelines/sessionreplay/ml-mirror/config'
+import {
+    KafkaWrapperTopicProducer,
+    RedisPoolDedupStore,
+} from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/ports'
 import { MlBlockMetadataSink } from '~/ingestion/pipelines/sessionreplay/ml-mirror/ml-block-metadata-sink'
 import { createMlMirrorReplayPipeline } from '~/ingestion/pipelines/sessionreplay/ml-mirror/ml-mirror-pipeline'
 import { resolvePseudonymKey } from '~/ingestion/pipelines/sessionreplay/ml-mirror/pseudonym-key'
@@ -31,7 +36,10 @@ import { SessionConsoleLogStore } from '~/ingestion/pipelines/sessionreplay/sess
 import { CleartextRecordingEncryptor } from '~/ingestion/pipelines/sessionreplay/shared/crypto/cleartext-encryptor'
 import { SessionFeatureStore } from '~/ingestion/pipelines/sessionreplay/shared/features/session-feature-store'
 import { CleartextKeyStore } from '~/ingestion/pipelines/sessionreplay/shared/keystore/cleartext-keystore'
-import { getDefaultKafkaSessionreplayProducerEnvConfig } from '~/ingestion/pipelines/sessionreplay/shared/outputs/producer-config'
+import {
+    INGESTION_SESSIONREPLAY_PRODUCER,
+    getDefaultKafkaSessionreplayProducerEnvConfig,
+} from '~/ingestion/pipelines/sessionreplay/shared/outputs/producer-config'
 import { buildSessionRecordingS3Client } from '~/ingestion/pipelines/sessionreplay/shared/s3-client'
 
 import { RedisPool } from '../types'
@@ -112,6 +120,18 @@ export class IngestionSessionReplayMlMirrorServer implements NodeServer {
 
         const scrubContext: ScrubContext = {
             allow: await loadAllowLists(this.buildAllowListFetcher(s3Client, bucket)),
+        }
+        // Advanced-route inline images are hashed, referenced, and emitted to the scrub topic, where a
+        // separate consumer worker scrubs them to S3. Off by default (kill-switch) so the producer path
+        // stays inert until the consumer is live; when off, those images fall back to the in-process blur.
+        if (this.config.SESSION_RECORDING_ML_IMAGE_SCRUB_ENABLED) {
+            scrubContext.imageScrub = {
+                dedup: new RedisPoolDedupStore(pools.redisPool),
+                producer: new KafkaWrapperTopicProducer(
+                    this.producerRegistry.getProducer(INGESTION_SESSIONREPLAY_PRODUCER),
+                    KAFKA_SESSION_REPLAY_IMAGE_SCRUB
+                ),
+            }
         }
 
         // Block metadata is produced to Kafka; the dedicated Parquet-sink deployment writes it to the ML bucket.
