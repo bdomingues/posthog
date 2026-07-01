@@ -4,16 +4,14 @@
  *  - 'passthrough': leave the image untouched. Only for images below the detectors' floor (<=16px),
  *    where no face/text could be found anyway, so scrubbing would lose zero protection while
  *    destroying high-signal icons/logos/glyphs that are valuable for model training.
- *  - 'cheap': the existing in-process downsample+blur. For canvas (dynamic, ~no dedup, so the
+ *  - 'cheapBlur': the existing in-process downsample+blur. For canvas (dynamic, ~no dedup, so the
  *    advanced path would flood the topic + S3 with non-deduping frames) and for images too big to
  *    fit on the topic.
- *  - 'advanced': hash -> Redis dedup -> post to the scrub topic -> consumer blurs and writes to S3.
- *    For static <img>/media raster, which dedups well (logos/avatars/photos) and is PII-bearing.
- *
- * Kept in sync with the consumer package's routing.ts (see content-ref.ts CONTRACT note).
+ *  - 'advancedScrub': hash -> Redis dedup -> post to the scrub topic -> consumer scrubs and writes to
+ *    S3. For static <img>/media raster, which dedups well (logos/avatars/photos) and is PII-bearing.
  */
 export type ImageSource = 'canvas' | 'img' | 'media'
-export type ScrubRoute = 'passthrough' | 'cheap' | 'advanced'
+export type ScrubRoute = 'passthrough' | 'cheapBlur' | 'advancedScrub'
 
 export const TINY_MAX_SIDE = 16 // <= this on the long side => below the face/text detector floor
 // A genuine <=16px image is a few hundred bytes; require the bytes to be small too, so a crafted tiny
@@ -44,12 +42,12 @@ export function routeImage(i: RouteInput): ScrubRoute {
     }
     // 2. Canvas is dynamic and dedups ~never -> cheap in-process blur instead of flooding the topic.
     if (i.source === 'canvas') {
-        return 'cheap'
+        return 'cheapBlur'
     }
     // 3. Can't fit on the topic -> cheap in-process blur fallback (rare; capture drops >~1MB already).
     if (i.byteLength > TOPIC_MAX_BYTES) {
-        return 'cheap'
+        return 'cheapBlur'
     }
     // 4. Static <img>/media raster -> advanced topic path (dedups, fidelity, PII-bearing).
-    return 'advanced'
+    return 'advancedScrub'
 }

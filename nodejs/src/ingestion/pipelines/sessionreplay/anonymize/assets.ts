@@ -68,10 +68,10 @@ function toDim(v: unknown): number | undefined {
 
 /**
  * Scrub one inlined image in `attrs[name]` by the routing policy:
- *  - advanced (static <img>/media raster, ml-mirror ports present): fail-safe placeholder now, then
- *    collect the raw bytes for the batched emit to the scrub topic; the reference is written in place
- *    once the emit resolves (consumer scrubs -> S3).
- *  - cheap (canvas, oversize, or ports absent): the existing in-process downsample+blur.
+ *  - advancedScrub (static <img>/media raster, ml-mirror ports present): fail-safe placeholder now,
+ *    then collect the raw bytes for the batched emit to the scrub topic; the reference is written in
+ *    place once the emit resolves (consumer scrubs -> S3).
+ *  - cheapBlur (canvas, oversize, or ports absent): the existing in-process downsample+blur.
  *  - passthrough (tiny): leave untouched.
  * Returns whether it acted on the attribute.
  */
@@ -104,7 +104,7 @@ function scrubInlineImage(
         jobs != null &&
         jobs.length < MAX_ADVANCED_IMAGES_PER_MESSAGE &&
         jobs.reduce((n, j) => n + j.bytes.length, bytes.length) <= MAX_ADVANCED_BYTES_PER_MESSAGE
-    if (route === 'advanced' && ctx.imageScrub && ctx.teamId != null && jobs != null && underCap) {
+    if (route === 'advancedScrub' && ctx.imageScrub && ctx.teamId != null && jobs != null && underCap) {
         attrs[name] = placeholder // fail-safe until the reference is written in place after the emit
         jobs.push({
             bytes,
@@ -114,8 +114,8 @@ function scrubInlineImage(
         })
         return true
     }
-    // cheap: in-process blur — for canvas/oversize, when ports/team are absent, or over the per-message
-    // cap. Reuses the already-decoded bytes (no second base64 decode).
+    // cheapBlur: in-process blur — for canvas/oversize, when ports/team are absent, or over the
+    // per-message cap. Reuses the already-decoded bytes (no second base64 decode).
     attrs[name] = placeholder
     ctx.blurJobs?.push(async () => {
         const blurred = await blurImageBytes(bytes)
