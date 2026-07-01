@@ -9,12 +9,12 @@ import { SessionBatchContext } from './sessions/session-batch-recorder'
  * The accumulating pipeline's beforeBatch step: mints a fresh recorder from the factory for the next
  * accumulation cycle and hands it to the pipeline as the batch context.
  */
-export function createSessionBatchStep(
+export function createCreateSessionBatchStep(
     sessionBatchFactory: SessionBatchFactory
 ): ProcessingStep<BeforeAccumulationInput, BeforeAccumulationOutput<SessionBatchContext>> {
-    return function sessionBatchStep(input) {
+    return function createSessionBatchStep(input) {
         return Promise.resolve(
-            ok({ batchContext: { sessionBatchRecorder: sessionBatchFactory.createBatch(), batchId: input.batchId } })
+            ok({ batchContext: { sessionBatchRecorder: sessionBatchFactory.create(), batchId: input.batchId } })
         )
     }
 }

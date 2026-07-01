@@ -57,24 +57,24 @@ describe('SessionBatchFactory', () => {
         jest.clearAllMocks()
     })
 
-    it('createBatch returns a fresh, independent recorder each call', () => {
+    it('create returns a fresh, independent recorder each call', () => {
         const factory = new SessionBatchFactory(makeConfig())
 
-        const first = factory.createBatch()
-        const second = factory.createBatch()
+        const first = factory.create()
+        const second = factory.create()
 
         expect(first).not.toBe(second)
         expect(SessionBatchRecorder).toHaveBeenCalledTimes(2)
     })
 
     it.each([0, 250, Number.MAX_SAFE_INTEGER])(
-        'createBatch passes maxEventsPerSessionPerBatch=%p and the feature rollout to the recorder',
+        'create passes maxEventsPerSessionPerBatch=%p and the feature rollout to the recorder',
         (maxEventsPerSessionPerBatch) => {
             const factory = new SessionBatchFactory(
                 makeConfig({ maxEventsPerSessionPerBatch, featuresRolloutPercentage: 42 })
             )
 
-            factory.createBatch()
+            factory.create()
 
             expect(SessionBatchRecorder).toHaveBeenCalledWith(
                 mockOffsetManager,
@@ -95,7 +95,7 @@ describe('SessionBatchFactory', () => {
     it('defaults the feature rollout to 100 when unset', () => {
         const factory = new SessionBatchFactory(makeConfig())
 
-        factory.createBatch()
+        factory.create()
 
         expect(SessionBatchRecorder).toHaveBeenCalledWith(
             expect.anything(),

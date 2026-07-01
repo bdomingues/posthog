@@ -26,7 +26,7 @@ import { createRecordSessionEventStep } from './record-session-event-step'
 import { createCommitOffsetsStep } from './session-batch-commit-offsets-step'
 import { createRecordMetricsStep } from './session-batch-record-metrics-step'
 import { createResolveRetentionStep } from './session-batch-resolve-retention-step'
-import { createSessionBatchStep } from './session-batch-step'
+import { createCreateSessionBatchStep } from './session-batch-step'
 import { createWriteStep } from './session-batch-write-step'
 import { createTeamFilterStep } from './team-filter-step'
 
@@ -219,7 +219,7 @@ export function createSessionReplayAccumulatingPipeline(
         Record<string, never>,
         OverflowOutput
     >({
-        beforeBatch: (builder) => builder.pipe(createSessionBatchStep(sessionBatchFactory)),
+        beforeBatch: (builder) => builder.pipe(createCreateSessionBatchStep(sessionBatchFactory)),
         pipeline: recordPipeline,
         // The flush lifecycle: resolve retention (off the S3 path), write to storage, commit the
         // offsets it covers, then record the flush metrics from the write step's block metadata.

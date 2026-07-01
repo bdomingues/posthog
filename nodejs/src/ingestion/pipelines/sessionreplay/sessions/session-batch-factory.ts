@@ -46,7 +46,7 @@ export interface SessionBatchFactoryConfig {
  *
  * ```
  * AccumulatingPipeline
- * ├── beforeBatch  → SessionBatchFactory.createBatch()  ── mints the recorder for this cycle
+ * ├── beforeBatch  → SessionBatchFactory.create()       ── mints the recorder for this cycle
  * ├── pipeline     → recorder.record(message)           ── record step folds events into the recorder
  * └── flush (on size/age trigger)
  *     ├── resolveRetention → retentionService            ── per-session retention, off the S3 path
@@ -93,7 +93,7 @@ export class SessionBatchFactory {
         this.encryptor = config.encryptor
     }
 
-    public createBatch(): SessionBatchRecorder {
+    public create(): SessionBatchRecorder {
         return new SessionBatchRecorder(
             this.offsetManager,
             this.fileStorage,
