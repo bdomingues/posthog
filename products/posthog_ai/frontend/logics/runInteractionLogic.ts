@@ -9,6 +9,7 @@ import {
     DEFAULT_COMPOSER_MODEL,
     resolveEffortForModel,
 } from 'products/posthog_ai/frontend/utils/composerModels'
+import { DEFAULT_COMPOSER_MODE, type PermissionMode } from 'products/posthog_ai/frontend/utils/composerModes'
 import { tasksRunCreate, tasksRunsCommandCreate } from 'products/tasks/frontend/generated/api'
 import {
     ClaudeRuntimeAdapterEnumApi,
@@ -51,6 +52,9 @@ const QUEUED_MESSAGE_ID = 'queued'
 // option's id is `model`; the effort option's id is `effort` (its category is `thought_level`).
 const MODEL_CONFIG_ID = 'model'
 const EFFORT_CONFIG_ID = 'effort'
+// The agent-server's permission-mode config option (`/code`'s "mode" preset). Sending
+// `set_config_option { configId: 'mode' }` is how `/code` applies a live shift+tab mode change.
+const MODE_CONFIG_ID = 'mode'
 
 /**
  * Max-agnostic interaction facade for a single task run. The UI binds to this one logic to drive every
@@ -75,7 +79,7 @@ export const runInteractionLogic = kea<runInteractionLogicType>([
             projectLogic,
             ['currentProjectId'],
             runStreamLogic({ streamKey: props.streamKey ?? props.runId }),
-            ['currentRunStatus', 'pendingPermissionRequest', 'respondingToPermission', 'isThinking'],
+            ['currentRunStatus', 'pendingPermissionRequest', 'respondingToPermission', 'isThinking', 'currentMode'],
         ],
         actions: [
             runStreamLogic({ streamKey: props.streamKey ?? props.runId }),
@@ -106,10 +110,14 @@ export const runInteractionLogic = kea<runInteractionLogicType>([
         // doesn't persist live changes back to the run state, so the override is the source of truth.
         setModel: (model: string) => ({ model }),
         setEffort: (effort: string) => ({ effort }),
-        // Internal: record the model / effort last synced to the agent session, so a send only fires a
+        // Pick the permission mode for the run. Like model/effort, selection is held client-side and synced to
+        // the running agent (via `set_config_option { configId: 'mode' }`) at send time, or seeds the next run.
+        setMode: (mode: PermissionMode) => ({ mode }),
+        // Internal: record the model / effort / mode last synced to the agent session, so a send only fires a
         // `set_config_option` when the pick actually differs from what the session is already running.
         setSentModel: (model: string) => ({ model }),
         setSentEffort: (effort: string) => ({ effort }),
+        setSentMode: (mode: PermissionMode) => ({ mode }),
     }),
 
     reducers({
@@ -159,6 +167,12 @@ export const runInteractionLogic = kea<runInteractionLogicType>([
                 setEffort: (_, { effort }) => effort,
             },
         ],
+        modeOverride: [
+            null as PermissionMode | null,
+            {
+                setMode: (_, { mode }) => mode,
+            },
+        ],
         // The model/effort last synced to the agent session via `set_config_option`. null means "not synced
         // yet this session" — the active config is then the run's stored value (or the default).
         sentModel: [
@@ -171,6 +185,12 @@ export const runInteractionLogic = kea<runInteractionLogicType>([
             null as string | null,
             {
                 setSentEffort: (_, { effort }) => effort,
+            },
+        ],
+        sentMode: [
+            null as PermissionMode | null,
+            {
+                setSentMode: (_, { mode }) => mode,
             },
         ],
     }),
@@ -223,6 +243,13 @@ export const runInteractionLogic = kea<runInteractionLogicType>([
             (s) => [s.effortOverride, (_, p) => p.currentEffort, s.selectedModel],
             (override, current, model): ReasoningEffortEnumApi =>
                 resolveEffortForModel(override ?? current ?? DEFAULT_COMPOSER_EFFORT, model),
+        ],
+        // The permission mode to display and launch with: the client-side override, else the session's live
+        // mode (from the stream's `current_mode_update` frames), else the default.
+        selectedMode: [
+            (s) => [s.modeOverride, s.currentMode],
+            (override, current): PermissionMode =>
+                override ?? (current as PermissionMode | null) ?? DEFAULT_COMPOSER_MODE,
         ],
         // The agent is actively working a turn — a follow-up typed now should stage rather than send.
         isBusy: [(s) => [s.isThinking], (isThinking): boolean => isThinking],
@@ -291,6 +318,16 @@ export const runInteractionLogic = kea<runInteractionLogicType>([
                     })
                     actions.setSentEffort(values.selectedEffort)
                 }
+                const activeMode =
+                    values.sentMode ?? (values.currentMode as PermissionMode | null) ?? DEFAULT_COMPOSER_MODE
+                if (values.selectedMode !== activeMode) {
+                    await tasksRunsCommandCreate(String(values.currentProjectId), props.taskId, props.runId, {
+                        jsonrpc: '2.0',
+                        method: 'set_config_option',
+                        params: { configId: MODE_CONFIG_ID, value: values.selectedMode },
+                    })
+                    actions.setSentMode(values.selectedMode)
+                }
                 await tasksRunsCommandCreate(String(values.currentProjectId), props.taskId, props.runId, {
                     jsonrpc: '2.0',
                     method: 'user_message',
@@ -343,6 +380,7 @@ export const runInteractionLogic = kea<runInteractionLogicType>([
                     runtime_adapter: ClaudeRuntimeAdapterEnumApi.Claude,
                     model: values.selectedModel,
                     reasoning_effort: values.selectedEffort,
+                    initial_permission_mode: values.selectedMode,
                     resume_from_run_id: props.runId,
                     pending_user_message: content,
                 }

@@ -12,6 +12,7 @@ import { MarkdownMessage } from '../messages/MarkdownMessage'
 import { getPermissionDisplay } from '../policy/permissionDisplayUtils'
 import { mapPermissionOptions, type ApprovalCardOption } from '../policy/permissionUtils'
 import type { PermissionRequestRecord } from '../types/streamTypes'
+import { getPlanText, PlanPreview } from './PlanPreview'
 import { QuestionField } from './QuestionField'
 
 interface PermissionInputProps {
@@ -67,6 +68,10 @@ export function PermissionInput({ streamKey, request }: PermissionInputProps): J
     // `toolCall.kind === 'plan'` covers adapters that tag the request directly.
     const isPlan = currentMode === 'plan' || request.rawToolCall.kind === 'plan'
     const prompt = isPlan ? 'Approve this plan?' : 'Approval required'
+    // For a plan approval, prefer the plan payload from the tool input over the generic request description.
+    const planText = isPlan
+        ? (getPlanText(request.rawToolCall.input) ?? request.description ?? request.title)
+        : undefined
     const display = getPermissionDisplay(request)
     const payloadLanguage = display.payload?.trim().match(/^[{[]/) ? Language.JSON : Language.Text
 
@@ -105,13 +110,17 @@ export function PermissionInput({ streamKey, request }: PermissionInputProps): J
             </div>
             <div className="font-medium text-sm">{prompt}</div>
             {display.title && <div className="text-xs text-secondary">{display.title}</div>}
-            {(request.title || request.description) && (
-                <div className="max-h-60 overflow-y-auto text-sm">
-                    <MarkdownMessage
-                        content={request.description ?? request.title ?? ''}
-                        id={`permission-${request.requestId}`}
-                    />
-                </div>
+            {isPlan && planText ? (
+                <PlanPreview plan={planText} id={`permission-${request.requestId}`} defaultExpanded />
+            ) : (
+                (request.title || request.description) && (
+                    <div className="max-h-60 overflow-y-auto text-sm">
+                        <MarkdownMessage
+                            content={request.description ?? request.title ?? ''}
+                            id={`permission-${request.requestId}`}
+                        />
+                    </div>
+                )
             )}
             {display.payload && (
                 <div className="max-h-60 overflow-y-auto">

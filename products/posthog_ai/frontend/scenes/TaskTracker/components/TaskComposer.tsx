@@ -10,9 +10,11 @@ import {
     Welcome,
 } from 'products/posthog_ai/frontend/api/primitives'
 import { resolveEffortForModel } from 'products/posthog_ai/frontend/utils/composerModels'
+import { cycleMode } from 'products/posthog_ai/frontend/utils/composerModes'
 
 import { taskTrackerSceneLogic } from '../taskTrackerSceneLogic'
 import { ComposerModelEffortPickers } from './ComposerModelEffortPickers'
+import { ComposerModePicker } from './ComposerModePicker'
 import { RepositorySelector } from './RepositorySelector'
 
 export function TaskComposer(): JSX.Element {
@@ -62,9 +64,22 @@ export function TaskComposer(): JSX.Element {
                                         submitShortcut="cmd-enter"
                                         autoFocus
                                         data-attr="task-composer-input"
+                                        onKeyDown={(e) => {
+                                            // shift+tab cycles the permission mode, matching `/code`.
+                                            if (e.key === 'Tab' && e.shiftKey) {
+                                                e.preventDefault()
+                                                setNewTaskData({
+                                                    permissionMode: cycleMode(newTaskData.permissionMode),
+                                                })
+                                            }
+                                        }}
                                     />
                                 </Composer.Field>
                                 <Composer.Footer>
+                                    <ComposerModePicker
+                                        selectedMode={newTaskData.permissionMode}
+                                        onModeChange={(permissionMode) => setNewTaskData({ permissionMode })}
+                                    />
                                     <ComposerModelEffortPickers
                                         selectedModel={newTaskData.model}
                                         selectedEffort={newTaskData.reasoningEffort}

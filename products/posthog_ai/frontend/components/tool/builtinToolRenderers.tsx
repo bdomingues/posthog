@@ -5,6 +5,8 @@ import { IconDocument, IconGlobe, IconMagicWand, IconSearch, IconTerminal, IconW
 // IconRobot is not exported from @posthog/icons — it lives only in the legacy lib icon set.
 import { IconRobot } from 'lib/lemon-ui/icons'
 
+import { MarkdownMessage } from '../../messages/MarkdownMessage'
+import { getPlanText } from '../PlanPreview'
 import { EditorSkeleton } from './EditorSkeleton'
 import { FilePath } from './FilePath'
 import { GenericMcpToolRenderer } from './GenericMcpToolRenderer'
@@ -103,6 +105,23 @@ const ReadToolRenderer = memo(function ReadToolRenderer(props: ToolRendererProps
             title={title}
             subtitle={path ? <FilePath path={path} /> : undefined}
             body={body}
+            turnComplete={turnComplete}
+            turnCancelled={turnCancelled}
+        />
+    )
+})
+
+/** ExitPlanMode — the agent's proposed plan; markdown in the body (auto-expands while running, collapses after). */
+const ExitPlanModeRenderer = memo(function ExitPlanModeRenderer(props: ToolRendererProps): JSX.Element {
+    const { message, icon, turnComplete, turnCancelled } = props
+    const plan = getPlanText(message.rawInput) ?? getContentText(message.content)
+
+    return (
+        <ToolActivity
+            message={message}
+            icon={icon ?? <IconDocument />}
+            title={message.title || 'Plan'}
+            body={plan ? <MarkdownMessage content={plan} id={`plan-${message.id}`} /> : undefined}
             turnComplete={turnComplete}
             turnCancelled={turnCancelled}
         />
@@ -346,6 +365,8 @@ export const BuiltinToolRenderer = memo(function BuiltinToolRenderer(props: Tool
             return <SkillToolRenderer {...props} />
         case 'ToolSearch':
             return <ToolSearchRenderer {...props} />
+        case 'ExitPlanMode':
+            return <ExitPlanModeRenderer {...props} />
         default:
             return <GenericMcpToolRenderer {...props} />
     }

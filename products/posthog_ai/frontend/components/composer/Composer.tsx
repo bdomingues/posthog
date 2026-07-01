@@ -2,6 +2,7 @@ import {
     createContext,
     forwardRef,
     type HTMLAttributes,
+    type KeyboardEventHandler,
     type ReactNode,
     type RefObject,
     useCallback,
@@ -279,6 +280,8 @@ export interface ComposerTextareaProps {
     maxRows?: number
     /** `'enter'` submits on Enter (PostHog AI), `'cmd-enter'` on Cmd/Ctrl+Enter (tasks composer). */
     submitShortcut?: 'enter' | 'cmd-enter'
+    /** Extra key handling (e.g. the mode picker's `shift+tab` cycle); runs after the submit shortcut. */
+    onKeyDown?: KeyboardEventHandler<HTMLTextAreaElement>
     'data-attr'?: string
 }
 

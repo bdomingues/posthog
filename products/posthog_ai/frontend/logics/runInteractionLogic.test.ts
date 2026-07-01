@@ -42,6 +42,7 @@ jest.mock('./runStreamLogic', () => {
             ],
             pendingPermissionRequest: [null, {}],
             respondingToPermission: [false, {}],
+            currentMode: [null, {}],
         }),
     ])
     return {
@@ -178,6 +179,48 @@ describe('runInteractionLogic', () => {
         expect((tasksRunsCommandCreate as jest.Mock).mock.calls).toEqual([userMessageCommand('again')])
     })
 
+    it('syncs a changed permission mode to the agent right before the message, and only when it changed', async () => {
+        setThinking(false)
+        logic.actions.setMode('plan')
+        logic.actions.setComposerFormValues({ draft: 'ship it' })
+
+        await expectLogic(logic, () => {
+            logic.actions.submitComposerForm()
+        }).toFinishAllListeners()
+
+        // The mode sync is a `set_config_option { configId: 'mode' }` command that lands before the message.
+        expect((tasksRunsCommandCreate as jest.Mock).mock.calls).toEqual([
+            setConfigCommand('mode', 'plan'),
+            userMessageCommand('ship it'),
+        ])
+
+        // A follow-up with the same mode re-syncs nothing — just the message.
+        ;(tasksRunsCommandCreate as jest.Mock).mockClear()
+        logic.actions.setComposerFormValues({ draft: 'again' })
+
+        await expectLogic(logic, () => {
+            logic.actions.submitComposerForm()
+        }).toFinishAllListeners()
+
+        expect((tasksRunsCommandCreate as jest.Mock).mock.calls).toEqual([userMessageCommand('again')])
+    })
+
+    it('seeds a fresh run with the picked permission mode when the run is terminal', async () => {
+        setStatus('completed')
+        logic.actions.setMode('acceptEdits')
+        logic.actions.setComposerFormValues({ draft: 'continue from here' })
+
+        await expectLogic(logic, () => {
+            logic.actions.submitComposerForm()
+        }).toFinishAllListeners()
+
+        expect(tasksRunCreate).toHaveBeenCalledWith(
+            '997',
+            TASK_ID,
+            expect.objectContaining({ initial_permission_mode: 'acceptEdits' })
+        )
+    })
+
     it('stages the message in the queue while the agent is busy', async () => {
         setThinking(true)
         logic.actions.setComposerFormValues({ draft: 'follow up' })
@@ -252,6 +295,7 @@ describe('runInteractionLogic', () => {
             runtime_adapter: 'claude',
             model: 'claude-opus-4-8',
             reasoning_effort: 'high',
+            initial_permission_mode: 'auto',
             resume_from_run_id: RUN_ID,
             pending_user_message: 'continue from here',
         })
