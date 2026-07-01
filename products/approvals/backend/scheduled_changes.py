@@ -9,13 +9,14 @@ enabled policy requires approval — create a pending ``ChangeRequest`` bound to
 change. The applier then keys off that binding (see ``process_scheduled_changes``).
 """
 
+import copy
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
 from django.http import HttpRequest
 
 from products.approvals.backend import decorators
-from products.approvals.backend.exceptions import PolicyConflict
+from products.approvals.backend.exceptions import ApprovalRequired, PolicyConflict
 from products.approvals.backend.models import ChangeRequest, ChangeRequestState, ValidationStatus
 from products.approvals.backend.services import apply_change_request
 
@@ -58,7 +59,11 @@ def scheduled_change_serializer_data(flag: "FeatureFlag", payload: dict[str, Any
             return None
         new_variants = value.get("variants", [])
         new_payloads = value.get("payloads", {})
-        updated_multivariate = current_filters.get("multivariate", {})
+        # Deep-copy before mutating: current_filters is flag.filters (a live reference), so assigning
+        # into its nested multivariate dict would mutate the flag's pre-change state in place. The gate
+        # would then compare the already-mutated filters against themselves, detect no rollout change,
+        # bind no ChangeRequest, and let the scheduled variant change dispatch unapproved.
+        updated_multivariate = copy.deepcopy(current_filters.get("multivariate", {}))
         updated_multivariate["variants"] = new_variants
         return {
             "filters": {
@@ -83,6 +88,9 @@ def gate_scheduled_change(flag: "FeatureFlag", payload: dict[str, Any], user) ->
     ``ChangeRequest`` can only carry one approval, so binding one would let the other policy's
     gated change ride along unapproved. We fail closed rather than save the row ungated — callers
     surface this as a 400 (creation/update) or skip the change (copy / recurring re-gate).
+
+    Raises ``ApprovalRequired`` when the only matching request is an already-approved duplicate:
+    binding it would let this schedule fire that approval at a moment it never covered. Fail closed.
     """
     # Deferred: feature_flags' serializer/actions transitively import posthog.tasks, which imports
     # this module — eager imports would create a circular import at startup.
@@ -165,8 +173,27 @@ def gate_scheduled_change(flag: "FeatureFlag", payload: dict[str, Any], user) ->
             guidance="Split your changes into separate scheduled changes to address each policy independently",
         )
 
-    if result.action in ("require_approval", "duplicate"):
+    if result.action == "require_approval":
         return result.change_request
+
+    if result.action == "duplicate":
+        existing = result.change_request
+        # A PENDING duplicate is safe to bind — the change still needs approval before it can fire.
+        # An APPROVED duplicate is not: binding it would let this schedule fire an already-approved
+        # change at a time its own approval never covered (e.g. bind a second schedule to another
+        # schedule's approved CR, or rebind an edited payload onto a stale approval). Fail closed so
+        # the caller surfaces a 409 (creation/update) or skips the change (recurring re-gate).
+        if existing is not None and existing.state == ChangeRequestState.APPROVED:
+            raise ApprovalRequired(
+                change_request=existing,
+                message=(
+                    "An approved change for this feature flag is already awaiting its scheduled "
+                    "application. Wait for it to apply before scheduling another change."
+                ),
+                required_approvers={},
+                error_code="change_request_pending",
+            )
+        return existing
 
     return None
 

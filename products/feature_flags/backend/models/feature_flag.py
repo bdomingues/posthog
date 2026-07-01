@@ -1,3 +1,4 @@
+import copy
 import json
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional, cast
@@ -552,7 +553,10 @@ class FeatureFlag(FileSystemSyncMixin, ModelActivityMixin, RootTeamMixin, models
                 invalid_keys = payload_keys - variant_keys
                 raise ValueError(f"Payload keys {invalid_keys} don't match variant keys {variant_keys}")
 
-            updated_multivariate = current_filters.get("multivariate", {})
+            # Deep-copy before mutating: current_filters is self.filters (a live reference), so
+            # assigning into its nested multivariate dict would mutate the flag's pre-change state
+            # in place, defeating the approval gate's old-vs-new comparison in FeatureFlagSerializer.
+            updated_multivariate = copy.deepcopy(current_filters.get("multivariate", {}))
             updated_multivariate["variants"] = new_variants
 
             serializer_data["filters"] = {

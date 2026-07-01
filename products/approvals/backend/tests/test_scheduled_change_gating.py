@@ -301,6 +301,115 @@ class TestScheduledChangeGating(APIBaseTest):
         assert reloaded.change_request.created_by == editor
         assert reloaded.change_request.created_by != self.user
 
+    def test_scheduled_variant_rollout_change_under_policy_is_gated(self, _mock_enabled):
+        # update_variants writes into the flag's live multivariate filters. Unless the gate deep-copies
+        # first, the in-place mutation makes detect() compare the changed rollout against itself, bind
+        # no CR, and let the variant change dispatch unapproved.
+        self._update_policy({"type": "before_after", "field": "rollout_percentage", "operator": ">", "value": 0})
+        flag = FeatureFlag.objects.create(
+            team=self.team,
+            key="variant-flag",
+            filters={
+                "groups": [{"properties": [], "rollout_percentage": 100}],
+                "multivariate": {
+                    "variants": [
+                        {"key": "control", "rollout_percentage": 50},
+                        {"key": "test", "rollout_percentage": 50},
+                    ]
+                },
+            },
+            active=True,
+            created_by=self.user,
+        )
+
+        scheduled = self._schedule(
+            flag,
+            {
+                "operation": "update_variants",
+                "value": {
+                    "variants": [
+                        {"key": "control", "rollout_percentage": 20},
+                        {"key": "test", "rollout_percentage": 80},
+                    ]
+                },
+            },
+            timezone.now() - timedelta(seconds=30),
+        )
+
+        assert scheduled.change_request is not None
+        assert scheduled.change_request.state == ChangeRequestState.PENDING
+
+        process_scheduled_changes()
+
+        flag.refresh_from_db()
+        variant_rollouts = {v["key"]: v["rollout_percentage"] for v in flag.filters["multivariate"]["variants"]}
+        # The gated change must not have applied — variants stay at their original 50/50 split.
+        assert variant_rollouts == {"control": 50, "test": 50}
+        scheduled.change_request.refresh_from_db()
+        assert scheduled.change_request.state == ChangeRequestState.EXPIRED
+
+    def test_cannot_retime_a_gated_schedule_with_live_change_request(self, _mock_enabled):
+        # An approver signs off on a change firing in a specific window. Retiming an approved schedule
+        # to fire immediately applies it outside the approval, so timing edits are blocked while the
+        # bound CR is pending or approved.
+        self._enable_policy()
+        flag = self._disabled_flag()
+
+        scheduled = self._schedule(
+            flag,
+            {"operation": "update_status", "value": True},
+            timezone.now() + timedelta(hours=2),
+        )
+        cr = scheduled.change_request
+        assert cr is not None
+        ChangeRequestService(cr, self.user).approve()
+        cr.refresh_from_db()
+        assert cr.state == ChangeRequestState.APPROVED
+
+        response = self.client.patch(
+            f"/api/projects/{self.team.id}/scheduled_changes/{scheduled.id}/",
+            {"scheduled_at": (timezone.now() - timedelta(seconds=30)).isoformat()},
+            format="json",
+        )
+
+        assert response.status_code == 400, response.content
+        scheduled.refresh_from_db()
+        assert scheduled.scheduled_at > timezone.now()
+
+    def test_second_schedule_cannot_bind_an_already_approved_change_request(self, _mock_enabled):
+        # A second schedule for the same flag+action would bind the first schedule's already-approved
+        # CR via duplicate detection and could fire it at an arbitrary time. It must fail closed.
+        self._enable_policy()
+        flag = self._disabled_flag()
+
+        first = self._schedule(
+            flag,
+            {"operation": "update_status", "value": True},
+            timezone.now() + timedelta(hours=2),
+        )
+        cr = first.change_request
+        assert cr is not None
+        ChangeRequestService(cr, self.user).approve()
+        cr.refresh_from_db()
+        assert cr.state == ChangeRequestState.APPROVED
+
+        response = self.client.post(
+            f"/api/projects/{self.team.id}/scheduled_changes/",
+            {
+                "record_id": str(flag.id),
+                "model_name": "FeatureFlag",
+                "payload": {"operation": "update_status", "value": True},
+                "scheduled_at": (timezone.now() - timedelta(seconds=30)).isoformat(),
+            },
+            format="json",
+        )
+
+        assert response.status_code == 409, response.content
+        assert response.json()["code"] == "change_request_pending"
+        assert ScheduledChange.objects.filter(record_id=str(flag.id)).count() == 1
+        flag.refresh_from_db()
+        assert flag.active is False
+
     def test_approved_then_stale_cr_is_not_applied(self, _mock_enabled):
         self._enable_policy()
         flag = self._disabled_flag()

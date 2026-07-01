@@ -135,6 +135,8 @@ class ScheduledChangeSerializer(serializers.ModelSerializer):
             if instance.executed_at is not None and not instance.is_recurring:
                 raise serializers.ValidationError("Cannot modify a scheduled change that has already executed.")
 
+            self._reject_timing_change_on_gated_schedule(instance, data)
+
         # For updates, merge with existing instance values
         is_recurring = data.get("is_recurring", getattr(instance, "is_recurring", False) if instance else False)
         recurrence_interval = data.get(
@@ -210,6 +212,37 @@ class ScheduledChangeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"end_date": "End date must be after the scheduled start date."})
 
         return data
+
+    # Fields that determine *when* a scheduled change fires. Re-gating (see update()) only covers
+    # *what* it applies, so these are locked once a schedule carries a live approval.
+    TIMING_FIELDS = ("scheduled_at", "cron_expression", "recurrence_interval", "end_date", "is_recurring")
+
+    def _reject_timing_change_on_gated_schedule(self, instance: ScheduledChange, data: dict) -> None:
+        """Block retiming a schedule whose bound ChangeRequest is still pending or approved.
+
+        An approver signs off on a change firing within a specific window. Re-gating only reacts to
+        payload edits, so without this an editor could wait for a future schedule to be approved and
+        then PATCH scheduled_at (or the recurrence config) to fire the approved change at a moment the
+        approval never covered — e.g. move it earlier to apply immediately. Deleting and recreating
+        the schedule re-gates from scratch, so this only forbids retiming a change mid-approval.
+        """
+        if instance.change_request_id is None:
+            return
+        change_request = instance.change_request
+        if change_request.state not in (ChangeRequestState.PENDING, ChangeRequestState.APPROVED):
+            return
+        changed = [
+            field for field in self.TIMING_FIELDS if field in data and data[field] != getattr(instance, field)
+        ]
+        if changed:
+            raise serializers.ValidationError(
+                {
+                    changed[0]: (
+                        "Cannot change the timing of a scheduled change while its approval request is "
+                        "pending or approved. Delete this schedule and create a new one to reschedule."
+                    )
+                }
+            )
 
     def _check_target_edit_permission(self, model_name: str | None, record_id: Any, team_id: int) -> FeatureFlag | None:
         """Enforce edit permission on the target record and return the resolved flag (None if not a flag)."""
