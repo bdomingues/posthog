@@ -96,7 +96,6 @@ export class SessionRecordingIngester {
     private readonly eventIngestionRestrictionManagerComponent: EventIngestionRestrictionManagerComponent
     private eventIngestionRestrictionManager!: EventIngestionRestrictionManager
     private stopEventIngestionRestrictionManager?: () => Promise<void>
-    private recordPipeline!: SessionReplayRecordPipeline
     private accumulatingPipeline!: SessionReplayAccumulatingPipeline
     private readonly maxBatchSizeBytes: number
     private readonly maxBatchAgeMs: number
@@ -300,7 +299,7 @@ export class SessionRecordingIngester {
         this.eventIngestionRestrictionManager = started.value
         this.stopEventIngestionRestrictionManager = started.stop
 
-        this.recordPipeline = this.createPipeline({
+        const recordPipeline = this.createPipeline({
             outputs: this.outputs,
             eventIngestionRestrictionManager: this.eventIngestionRestrictionManager,
             overflowEnabled: this.overflowEnabled(),
@@ -311,7 +310,7 @@ export class SessionRecordingIngester {
         })
 
         this.accumulatingPipeline = createSessionReplayAccumulatingPipeline({
-            recordPipeline: this.recordPipeline,
+            recordPipeline,
             sessionBatchFactory: this.sessionBatchFactory,
             retentionService: this.retentionService,
             offsetManager: this.offsetManager,
