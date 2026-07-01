@@ -11,6 +11,7 @@ import { TopHogRegistry } from '~/ingestion/framework/extensions/tophog'
 import { drop, ok, redirect } from '~/ingestion/framework/results'
 import { SessionBatchManager } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-manager'
 import { SessionBatchRecorder } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
+import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { createMockIngestionOutputs } from '~/tests/helpers/mock-ingestion-outputs'
@@ -87,6 +88,15 @@ describe('session-replay-pipeline', () => {
 
     // Debug logging disabled by default in tests
     const isDebugLoggingEnabled = () => false
+
+    // Resolves every session to 30d so messages flow through to recording.
+    const retentionService = {
+        resolveSessionRetentions: jest
+            .fn()
+            .mockImplementation((sessions: { teamId: number; sessionId: string }[]) =>
+                Promise.resolve(sessions.map(() => ({ resolved: true, retentionPeriod: '30d' })))
+            ),
+    } as unknown as RetentionService
 
     const defaultTeam: TeamForReplay = {
         teamId: 1,
@@ -243,6 +253,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -275,6 +286,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -300,6 +312,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -333,6 +346,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -382,6 +396,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -413,6 +428,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -440,6 +456,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -484,6 +501,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -514,6 +532,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -552,6 +571,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: teamServiceThatDropsSecond,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -577,6 +597,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -598,6 +619,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -635,6 +657,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -655,6 +678,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -675,6 +699,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -710,6 +735,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -728,7 +754,8 @@ describe('session-replay-pipeline', () => {
                     message: expect.objectContaining({
                         session_id: 'session-1',
                     }),
-                })
+                }),
+                '30d'
             )
         })
 
@@ -739,6 +766,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -766,6 +794,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -791,6 +820,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: teamServiceThatReturnsNull,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -812,6 +842,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -838,6 +869,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -864,6 +896,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -890,6 +923,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -937,6 +971,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -978,6 +1013,7 @@ describe('session-replay-pipeline', () => {
                 overflowEnabled: true,
                 promiseScheduler,
                 teamService: mockTeamService,
+                retentionService,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,

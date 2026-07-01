@@ -97,6 +97,7 @@ export class SessionRecordingIngester {
     private readonly redisPool: RedisPool
     private readonly restrictionRedisPool: RedisPool
     private readonly teamService: TeamService
+    private readonly retentionService: RetentionService
     private readonly fileStorage: SessionBatchFileStorage
     private readonly eventIngestionRestrictionManagerComponent: EventIngestionRestrictionManagerComponent
     private eventIngestionRestrictionManager!: EventIngestionRestrictionManager
@@ -171,7 +172,7 @@ export class SessionRecordingIngester {
             { pipeline: 'session_recordings' }
         )
 
-        const retentionService = new RetentionService(this.redisPool, this.teamService)
+        this.retentionService = new RetentionService(this.redisPool, this.teamService)
 
         const offsetManager = new KafkaOffsetManager(this.commitOffsets.bind(this), this.topic)
         this.createPipeline = collaborators.createPipeline ?? createSessionReplayPipeline
@@ -191,8 +192,7 @@ export class SessionRecordingIngester {
                       s3Client,
                       this.config.SESSION_RECORDING_V2_S3_BUCKET,
                       this.config.SESSION_RECORDING_V2_S3_PREFIX,
-                      this.config.SESSION_RECORDING_V2_S3_TIMEOUT_MS,
-                      retentionService
+                      this.config.SESSION_RECORDING_V2_S3_TIMEOUT_MS
                   )
                 : new BlackholeSessionBatchFileStorage())
 
@@ -213,7 +213,7 @@ export class SessionRecordingIngester {
         this.keyStore =
             collaborators.keyStore ??
             new MemoryCachedKeyStore(
-                getKeyStore(retentionService, region, {
+                getKeyStore(region, {
                     kmsEndpoint: config.SESSION_RECORDING_KMS_ENDPOINT,
                     dynamoDBEndpoint: config.SESSION_RECORDING_DYNAMODB_ENDPOINT,
                 })
@@ -307,6 +307,7 @@ export class SessionRecordingIngester {
             overflowEnabled: this.overflowEnabled(),
             promiseScheduler: this.promiseScheduler,
             teamService: this.teamService,
+            retentionService: this.retentionService,
             topHog: this.topHog,
             sessionBatchManager: this.sessionBatchManager,
             isDebugLoggingEnabled: this.isDebugLoggingEnabled,

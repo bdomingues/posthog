@@ -3,6 +3,7 @@ import { v7 as uuidv7 } from 'uuid'
 import { logger } from '~/common/utils/logger'
 import { captureException } from '~/common/utils/posthog'
 import { KafkaOffsetManager } from '~/ingestion/pipelines/sessionreplay/kafka/offset-manager'
+import { RetentionPeriod, RetentionPeriodToDaysMap } from '~/ingestion/pipelines/sessionreplay/shared/constants'
 import {
     SessionFeatureBlock,
     SessionFeatureStore,
@@ -68,7 +69,10 @@ import { SnappySessionRecorder } from './snappy-session-recorder'
 export class SessionBatchRecorder {
     private readonly partitionSessions = new Map<
         number,
-        Map<string, [SnappySessionRecorder, SessionConsoleLogRecorder, SessionFeatureRecorder, SessionKey]>
+        Map<
+            string,
+            [SnappySessionRecorder, SessionConsoleLogRecorder, SessionFeatureRecorder, SessionKey, RetentionPeriod]
+        >
     >()
     private readonly partitionSizes = new Map<number, number>()
     private _size: number = 0
@@ -97,9 +101,11 @@ export class SessionBatchRecorder {
      * Appends events into the appropriate session
      *
      * @param message - The message to record, including team context
+     * @param retentionPeriod - The session's retention, resolved upstream; sets the key expiry and
+     *   routes the flush to the matching per-retention storage.
      * @returns Number of raw bytes written (without compression)
      */
-    public async record(message: MessageWithTeam): Promise<number> {
+    public async record(message: MessageWithTeam, retentionPeriod: RetentionPeriod): Promise<number> {
         const { partition } = message.message.metadata
         const sessionId = message.message.session_id
         const teamId = message.team.teamId
@@ -123,7 +129,7 @@ export class SessionBatchRecorder {
         }
 
         const sessionKey = isNewSession
-            ? await this.keyStore.generateKey(sessionId, teamId)
+            ? await this.keyStore.generateKey(sessionId, teamId, RetentionPeriodToDaysMap[retentionPeriod])
             : await this.keyStore.getKey(sessionId, teamId)
 
         if (sessionKey.sessionState === 'deleted') {
@@ -199,6 +205,7 @@ export class SessionBatchRecorder {
                 new SessionConsoleLogRecorder(sessionId, teamId, this.batchId, this.consoleLogStore),
                 new SessionFeatureRecorder(sessionId, teamId, this.batchId, this.featuresRolloutPercentage),
                 sessionKey,
+                retentionPeriod,
             ])
         }
 
@@ -307,6 +314,7 @@ export class SessionBatchRecorder {
                     consoleLogRecorder,
                     featureRecorder,
                     sessionKey,
+                    retentionPeriod,
                 ] of sessions.values()) {
                     const {
                         buffer,
@@ -350,6 +358,7 @@ export class SessionBatchRecorder {
                         buffer: encryptedBuffer,
                         teamId: sessionBlockRecorder.teamId,
                         sessionId: sessionBlockRecorder.sessionId,
+                        retentionPeriod,
                     })
 
                     blockMetadata.push({

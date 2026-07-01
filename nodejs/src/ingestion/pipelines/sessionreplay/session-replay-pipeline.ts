@@ -12,6 +12,7 @@ import { createBatch, createUnwrapper } from '~/ingestion/framework/helpers'
 import { PipelineConfig } from '~/ingestion/framework/result-handling-pipeline'
 import { ParsedMessageData } from '~/ingestion/pipelines/sessionreplay/kafka/types'
 import { SessionBatchManager } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-manager'
+import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { ValueMatcher } from '~/types'
@@ -19,6 +20,7 @@ import { ValueMatcher } from '~/types'
 import { createLibVersionMonitorStep } from './lib-version-monitor-step'
 import { createParseMessageStep } from './parse-message-step'
 import { createRecordSessionEventStep } from './record-session-event-step'
+import { createResolveRetentionStep } from './session-batch-resolve-retention-step'
 import { createTeamFilterStep } from './team-filter-step'
 
 export interface SessionReplayPipelineInput {
@@ -36,6 +38,8 @@ export interface SessionReplayPipelineConfig {
     overflowEnabled: boolean
     promiseScheduler: PromiseScheduler
     teamService: TeamService
+    /** Resolves per-session retention before recording, so keys and storage route correctly */
+    retentionService: RetentionService
     /** TopHog registry for tracking metrics. */
     topHog: TopHogRegistry
     /** Session batch manager for recording sessions. */
@@ -68,6 +72,7 @@ export function createSessionReplayPipeline(
         overflowEnabled,
         promiseScheduler,
         teamService,
+        retentionService,
         topHog,
         sessionBatchManager,
         isDebugLoggingEnabled,
@@ -122,29 +127,38 @@ export function createSessionReplayPipeline(
                                             )
                                             // Monitor library version and emit warnings for old versions
                                             .pipe(createLibVersionMonitorStep())
-                                            // Record to session batch
-                                            .pipe(
-                                                topHogWrapper(
-                                                    createRecordSessionEventStep({
-                                                        sessionBatchManager,
-                                                        isDebugLoggingEnabled,
-                                                    }),
-                                                    [
-                                                        sum(
-                                                            'message_size_by_session_id',
-                                                            (input) => ({
-                                                                token: input.parsedMessage.token ?? 'unknown',
-                                                                session_id: input.parsedMessage.session_id,
-                                                            }),
-                                                            (input) => input.parsedMessage.metadata.rawSize
-                                                        ),
-                                                        timer('consume_time_ms_by_session_id', (input) => ({
+                                    )
+                                    // Resolve retention for the whole batch in one call, before key
+                                    // generation; drop sessions whose retention can't be resolved.
+                                    .gather()
+                                    .pipeBatchWithRetry(createResolveRetentionStep(retentionService), {
+                                        tries: 3,
+                                        sleepMs: 100,
+                                    })
+                                    // Record to session batch (uses the resolved retention)
+                                    .sequentially((b) =>
+                                        b.pipe(
+                                            topHogWrapper(
+                                                createRecordSessionEventStep({
+                                                    sessionBatchManager,
+                                                    isDebugLoggingEnabled,
+                                                }),
+                                                [
+                                                    sum(
+                                                        'message_size_by_session_id',
+                                                        (input) => ({
                                                             token: input.parsedMessage.token ?? 'unknown',
                                                             session_id: input.parsedMessage.session_id,
-                                                        })),
-                                                    ]
-                                                )
+                                                        }),
+                                                        (input) => input.parsedMessage.metadata.rawSize
+                                                    ),
+                                                    timer('consume_time_ms_by_session_id', (input) => ({
+                                                        token: input.parsedMessage.token ?? 'unknown',
+                                                        session_id: input.parsedMessage.session_id,
+                                                    })),
+                                                ]
                                             )
+                                        )
                                     )
                                     .gather()
                             )

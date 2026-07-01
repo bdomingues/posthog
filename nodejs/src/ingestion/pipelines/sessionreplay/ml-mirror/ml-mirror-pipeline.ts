@@ -18,6 +18,7 @@ import { createAnonymizeStep } from '~/ingestion/pipelines/sessionreplay/anonymi
 import { ScrubContext } from '~/ingestion/pipelines/sessionreplay/anonymize/config'
 import { createParseMessageStep } from '~/ingestion/pipelines/sessionreplay/parse-message-step'
 import { createRecordSessionEventStep } from '~/ingestion/pipelines/sessionreplay/record-session-event-step'
+import { createResolveRetentionStep } from '~/ingestion/pipelines/sessionreplay/session-batch-resolve-retention-step'
 import { createTeamFilterStep } from '~/ingestion/pipelines/sessionreplay/team-filter-step'
 
 export type MlMirrorReplayPipelineConfig = SessionReplayPipelineConfig & {
@@ -39,6 +40,7 @@ export function createMlMirrorReplayPipeline(
         overflowEnabled,
         promiseScheduler,
         teamService,
+        retentionService,
         topHog,
         sessionBatchManager,
         isDebugLoggingEnabled,
@@ -77,15 +79,23 @@ export function createMlMirrorReplayPipeline(
                             .teamAware((b) =>
                                 b
                                     .sequentially((b) =>
+                                        b.pipe(
+                                            topHogWrapper(createParseMessageStep(), [
+                                                timer('parse_time_ms_by_session_id', (input) => ({
+                                                    token: input.headers.token ?? 'unknown',
+                                                    session_id: input.headers.session_id ?? 'unknown',
+                                                })),
+                                            ])
+                                        )
+                                    )
+                                    // Resolve retention for the whole batch, dropping unresolvable sessions.
+                                    .gather()
+                                    .pipeBatchWithRetry(createResolveRetentionStep(retentionService), {
+                                        tries: 3,
+                                        sleepMs: 100,
+                                    })
+                                    .sequentially((b) =>
                                         b
-                                            .pipe(
-                                                topHogWrapper(createParseMessageStep(), [
-                                                    timer('parse_time_ms_by_session_id', (input) => ({
-                                                        token: input.headers.token ?? 'unknown',
-                                                        session_id: input.headers.session_id ?? 'unknown',
-                                                    })),
-                                                ])
-                                            )
                                             // Anonymize before recording so derived metadata is scrubbed too.
                                             .pipe(createAnonymizeStep({ scrubContext }))
                                             .pipe(
