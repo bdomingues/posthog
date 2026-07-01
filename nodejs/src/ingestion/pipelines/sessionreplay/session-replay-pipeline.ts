@@ -40,13 +40,13 @@ export interface SessionReplayPipelineOutput {
 }
 
 /**
- * The per-message record pipeline wrapped by the accumulating pipeline. Its input carries the
- * batch context (the recorder) tagged on by the accumulating pipeline, which the record step
+ * The per-message inner pipeline wrapped by the session replay pipeline. Its input carries the
+ * batch context (the recorder) tagged on by the session replay pipeline, which the record step
  * folds events into.
  */
 export type SessionReplayInnerPipeline = BatchPipeline<
     SessionReplayPipelineInput & SessionBatchContext & AccumulationContext, // TInput: element in (raw input + batch recorder + batch id)
-    SessionReplayPipelineOutput, // TOutput: element out of the record pipeline
+    SessionReplayPipelineOutput, // TOutput: element out of the inner pipeline
     { message: Message }, // CInput: per-element context in (the Kafka message)
     { message: Message }, // COutput: per-element context out (the Kafka message)
     OverflowOutput // R: redirect output names this pipeline can emit
@@ -54,9 +54,9 @@ export type SessionReplayInnerPipeline = BatchPipeline<
 
 export type SessionReplayPipeline = AccumulatingPipeline<
     SessionReplayPipelineInput, // TRecordIn: element fed in per message (batch context is added internally)
-    SessionReplayPipelineOutput, // TRecordOut: element out of the record pipeline
-    { message: Message }, // CRecordIn: record-pipeline context in (the Kafka message)
-    { message: Message }, // CRecordOut: record-pipeline context out (the Kafka message)
+    SessionReplayPipelineOutput, // TRecordOut: element out of the inner pipeline
+    { message: Message }, // CRecordIn: inner-pipeline context in (the Kafka message)
+    { message: Message }, // CRecordOut: inner-pipeline context out (the Kafka message)
     SessionBatchContext, // CBatch: batch context minted per cycle (the recorder), tagged on every element and the flush unit
     SessionBlockMetadata[], // TFlushOut: element out of the flush pipeline (written block metadata)
     Record<string, never>, // CFlushOut: flush-pipeline context out (empty — the flush unit carries no context)
@@ -89,7 +89,7 @@ export interface SessionReplayInnerPipelineConfig {
 }
 
 /**
- * Creates the session replay pipeline.
+ * Creates the session replay inner pipeline.
  *
  * The pipeline processes messages through these phases:
  * 1. Restrictions - Parse headers and apply event ingestion restrictions (drop/overflow)
@@ -198,10 +198,11 @@ export function createSessionReplayInnerPipeline(config: SessionReplayInnerPipel
 }
 
 /**
- * Wraps the record pipeline in an accumulating pipeline: the record pipeline folds events into a
- * recorder minted per cycle by the factory; the flush pipeline resolves retention off the S3 write
- * path (retrying transient failures), writes the recorder to storage, commits the offsets it
- * covers, then records the flush metrics — all on a size or age trigger.
+ * Builds the session replay pipeline: an accumulating pipeline wrapping the per-message inner
+ * pipeline. The inner pipeline folds events into a recorder minted per cycle by the factory; the
+ * flush pipeline resolves retention off the S3 write path (retrying transient failures), writes the
+ * recorder to storage, commits the offsets it covers, then records the flush metrics — all on a
+ * size or age trigger.
  */
 export function createSessionReplayPipeline(config: SessionReplayPipelineConfig): SessionReplayPipeline {
     const { recordPipeline, sessionBatchFactory, retentionService, offsetManager, maxBatchSizeBytes, maxBatchAgeMs } =

@@ -1,5 +1,5 @@
 /**
- * Integration test for the session replay accumulating pipeline.
+ * Integration test for the session replay pipeline.
  *
  * Drives createSessionReplayPipeline end-to-end with every external dependency
  * (Kafka, Redis, S3) mocked: real record pipeline, real flush pipeline (resolve retention → write
@@ -89,7 +89,7 @@ function blockMetadata(sessionId: string): SessionBlockMetadata {
     } as unknown as SessionBlockMetadata
 }
 
-describe('session replay accumulating pipeline integration', () => {
+describe('session replay pipeline integration', () => {
     let pipeline: SessionReplayPipeline
     let mockRecorder: jest.Mocked<SessionBatchRecorder>
     let mockOffsetManager: jest.Mocked<KafkaOffsetManager>

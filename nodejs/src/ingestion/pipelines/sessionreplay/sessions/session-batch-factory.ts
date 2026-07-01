@@ -39,13 +39,13 @@ export interface SessionBatchFactoryConfig {
  *
  * Each accumulation cycle of the session replay pipeline gets a fresh recorder from here. The
  * factory holds no current-batch state — the live recorder lives in the pipeline's batch context —
- * which keeps batch lifecycle entirely inside the accumulating pipeline and leaves room for it to
+ * which keeps batch lifecycle entirely inside the session replay pipeline and leaves room for it to
  * run concurrent batches later.
  *
  * How the pieces fit (see `createSessionReplayPipeline` in `session-replay-pipeline.ts`):
  *
  * ```
- * AccumulatingPipeline
+ * SessionReplayPipeline (an AccumulatingPipeline)
  * ├── beforeBatch  → SessionBatchFactory.create()       ── mints the recorder for this cycle
  * ├── pipeline     → recorder.record(message)           ── record step folds events into the recorder
  * └── flush (on size/age trigger)

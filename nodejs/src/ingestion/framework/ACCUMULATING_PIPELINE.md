@@ -286,4 +286,4 @@ decided later without touching the abstraction.
    `BatchingPipeline`), or retry?
 3. Narrow `{ flushed: false }` elements to just
    `{ partition, offset, sessionId, outcome }` (drop the parsed-message payload
-   that today's `runSessionReplayPipeline` returns and the consumer ignores)?
+   that the inner pipeline returns and the consumer ignores)?

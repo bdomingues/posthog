@@ -63,8 +63,8 @@ export type SessionRecordingIngesterConfig = SessionRecordingConfig &
         'INGESTION_PIPELINE' | 'INGESTION_LANE'
     >
 
-/** Builds the session replay record pipeline for a deployment (default or ML mirror). */
-export type SessionReplayPipelineFactory = (config: SessionReplayInnerPipelineConfig) => SessionReplayInnerPipeline
+/** Builds the session replay inner pipeline for a deployment (default or ML mirror). */
+export type SessionReplayInnerPipelineFactory = (config: SessionReplayInnerPipelineConfig) => SessionReplayInnerPipeline
 
 /** Collaborators a deployment can inject to vary ingester behavior; anything omitted uses the primary default. */
 export interface SessionRecordingIngesterCollaborators {
@@ -74,7 +74,7 @@ export interface SessionRecordingIngesterCollaborators {
     featureStore?: SessionFeatureStore
     keyStore?: KeyStore
     encryptor?: RecordingEncryptor
-    createPipeline?: SessionReplayPipelineFactory
+    createPipeline?: SessionReplayInnerPipelineFactory
 }
 
 export class SessionRecordingIngester {
@@ -96,7 +96,7 @@ export class SessionRecordingIngester {
     private readonly eventIngestionRestrictionManagerComponent: EventIngestionRestrictionManagerComponent
     private eventIngestionRestrictionManager!: EventIngestionRestrictionManager
     private stopEventIngestionRestrictionManager?: () => Promise<void>
-    private accumulatingPipeline!: SessionReplayPipeline
+    private pipeline!: SessionReplayPipeline
     private readonly maxBatchSizeBytes: number
     private readonly maxBatchAgeMs: number
     private readonly outputs: IngestionOutputs<
@@ -111,7 +111,7 @@ export class SessionRecordingIngester {
     private readonly topHog: TopHog
     private readonly keyStore: KeyStore
     private readonly encryptor: RecordingEncryptor
-    private readonly createPipeline: SessionReplayPipelineFactory
+    private readonly createPipeline: SessionReplayInnerPipelineFactory
 
     constructor(
         private config: SessionRecordingIngesterConfig,
@@ -266,23 +266,23 @@ export class SessionRecordingIngester {
         SessionRecordingIngesterMetrics.observeKafkaBatchSize(batchSize)
         SessionRecordingIngesterMetrics.observeKafkaBatchSizeKb(batchSizeKb)
 
-        // Feed messages into the accumulating pipeline (records into the current batch) and drain it.
+        // Feed messages into the session replay pipeline (records into the current batch) and drain it.
         // The pipeline decides when to flush (size or age); the consumer commits offsets on each flush.
         await instrumentFn(`recordingingesterv2.handleEachBatch.runPipeline`, async () => {
-            await this.accumulatingPipeline.feed(messages.map((message) => createOkContext({ message }, { message })))
-            await this.drainAccumulatingPipeline()
+            await this.pipeline.feed(messages.map((message) => createOkContext({ message }, { message })))
+            await this.drainPipeline()
         })
 
         this.kafkaConsumer.heartbeat()
     }
 
     /**
-     * Drains the accumulating pipeline to completion. Flushing — writing to storage, committing
+     * Drains the session replay pipeline to completion. Flushing — writing to storage, committing
      * offsets, and recording flush metrics — is handled by the flush pipeline's steps, so the
      * consumer just pumps next() until the pipeline is empty.
      */
-    private async drainAccumulatingPipeline(): Promise<void> {
-        while ((await this.accumulatingPipeline.next()) !== null) {
+    private async drainPipeline(): Promise<void> {
+        while ((await this.pipeline.next()) !== null) {
             // flush lifecycle runs inside the pipeline; nothing to do per result here
         }
     }
@@ -309,7 +309,7 @@ export class SessionRecordingIngester {
             isDebugLoggingEnabled: this.isDebugLoggingEnabled,
         })
 
-        this.accumulatingPipeline = createSessionReplayPipeline({
+        this.pipeline = createSessionReplayPipeline({
             recordPipeline,
             sessionBatchFactory: this.sessionBatchFactory,
             retentionService: this.retentionService,
@@ -317,7 +317,7 @@ export class SessionRecordingIngester {
             maxBatchSizeBytes: this.maxBatchSizeBytes,
             maxBatchAgeMs: this.maxBatchAgeMs,
         })
-        this.accumulatingPipeline.start()
+        this.pipeline.start()
 
         // Check that the storage backend is healthy before starting the consumer
         // This is especially important in local dev with minio
@@ -371,7 +371,7 @@ export class SessionRecordingIngester {
 
         // Final flush: stop the age timer and persist the last partial batch. The flush pipeline's
         // steps commit its offsets and record metrics.
-        await this.accumulatingPipeline.stop()
+        await this.pipeline.stop()
 
         const promiseResults = await this.promiseScheduler.waitForAllSettled()
 
@@ -414,7 +414,7 @@ export class SessionRecordingIngester {
         SessionRecordingIngesterMetrics.resetSessionsHandled()
         // Process whatever is buffered and flush it; the flush pipeline commits the offsets it covers,
         // so the new owner resumes from after the work we already persisted.
-        await this.accumulatingPipeline.flush()
+        await this.pipeline.flush()
     }
 
     private async commitOffsets(offsets: TopicPartitionOffset[]): Promise<void> {
