@@ -1,11 +1,12 @@
 /** Routes each parsed rrweb event to the right scrubber by type/source. */
 import { logger } from '~/common/utils/logger'
 import { ParsedMessageData } from '~/ingestion/pipelines/sessionreplay/kafka/types'
+import { emitImagesForScrub } from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/producer'
 import { RRWebEventSource, RRWebEventType } from '~/ingestion/pipelines/sessionreplay/rrweb-types'
 
 import { runBlurJobs } from './blur'
 import { scrubCanvasMutation } from './canvas'
-import { BlurJob, ScrubContext, isObject } from './config'
+import { BlurJob, ImageScrubJob, ScrubContext, isObject } from './config'
 import { scrubCompressedFullSnapshot, scrubCompressedMutation } from './cv'
 import { scrubFullSnapshot, scrubMutation } from './dom'
 import { scrubText } from './text'
@@ -22,10 +23,12 @@ const CONSOLE_PLUGIN = 'rrweb/console@1'
  */
 export async function anonymizeParsedMessage(
     scrubContext: ScrubContext,
-    parsedMessage: ParsedMessageData
+    parsedMessage: ParsedMessageData,
+    teamId?: number
 ): Promise<{ failed: boolean }> {
     const blurJobs: BlurJob[] = []
-    const ctx: ScrubContext = { ...scrubContext, blurJobs }
+    const imageScrubJobs: ImageScrubJob[] = []
+    const ctx: ScrubContext = { ...scrubContext, teamId, blurJobs, imageScrubJobs }
 
     for (const events of Object.values(parsedMessage.eventsByWindowId)) {
         for (const event of events) {
@@ -38,6 +41,22 @@ export async function anonymizeParsedMessage(
                 })
                 return { failed: true }
             }
+        }
+    }
+
+    // Advanced-route images: one batched emit to the scrub topic (one Redis round-trip + one send),
+    // then write each resolved reference back in place. Fail closed — a produce failure drops the
+    // message rather than record references whose images never reached the topic.
+    if (ctx.imageScrub && teamId != null && imageScrubJobs.length > 0) {
+        try {
+            const results = await emitImagesForScrub(
+                imageScrubJobs.map((job) => ({ teamId, bytes: job.bytes })),
+                ctx.imageScrub
+            )
+            imageScrubJobs.forEach((job, i) => job.apply(results[i].ref))
+        } catch (error) {
+            logger.warn('🙈', 'image_scrub_emit_failed', { error: String(error) })
+            return { failed: true }
         }
     }
 

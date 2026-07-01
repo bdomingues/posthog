@@ -1,4 +1,6 @@
 /** Media detection + placeholder/blur dispatch. */
+import { ImageSource, routeImage } from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/routing'
+
 import { BLANK_IMAGE_DATA_URI, blurImageDataUri, isImageDataUri } from './blur'
 import { ScrubContext } from './config'
 import { scrubUrl } from './url'
@@ -36,17 +38,71 @@ export function hasMediaSrcAttr(attrs: Record<string, unknown>): boolean {
     return MEDIA_SRC_ATTRS.some((name) => Object.prototype.hasOwnProperty.call(attrs, name))
 }
 
+/** Raw bytes of an image data URI's base64 payload, or null if it isn't a base64 image data URI. */
+function imageDataUriBytes(dataUri: string): Buffer | null {
+    const comma = dataUri.indexOf(',')
+    if (comma < 0) {
+        return null
+    }
+    const meta = dataUri.slice('data:'.length, comma)
+    if (!meta.includes('base64') || !meta.startsWith('image/')) {
+        return null
+    }
+    return Buffer.from(dataUri.slice(comma + 1), 'base64')
+}
+
+/** Coerce an rrweb width/height attribute (number or numeric string) to a positive number, else undefined. */
+function toDim(v: unknown): number | undefined {
+    const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
+    return Number.isFinite(n) && n > 0 ? n : undefined
+}
+
 /**
- * Blur an inlined-image data URI held in an attribute (a `<canvas>`/`<img>` `rr_dataURL`).
- * Blanks it synchronously (fail-safe) and defers the real blur. Returns whether it acted.
+ * Scrub one inlined image in `attrs[name]` by the routing policy:
+ *  - advanced (static <img>/media raster, ml-mirror ports present): fail-safe placeholder now, then
+ *    collect the raw bytes for the batched emit to the scrub topic; the reference is written in place
+ *    once the emit resolves (consumer scrubs -> S3).
+ *  - cheap (canvas, oversize, or ports absent): the existing in-process downsample+blur.
+ *  - passthrough (tiny): leave untouched.
+ * Returns whether it acted on the attribute.
  */
-export function blurInlineImageAttr(ctx: ScrubContext, attrs: Record<string, unknown>, name: string): boolean {
+function scrubInlineImage(
+    ctx: ScrubContext,
+    attrs: Record<string, unknown>,
+    name: string,
+    source: ImageSource,
+    placeholder: string
+): boolean {
     const value = attrs[name]
     if (typeof value !== 'string' || !isImageDataUri(value)) {
         return false
     }
+    const bytes = imageDataUriBytes(value)
+    if (bytes === null) {
+        return false
+    }
+    const route = routeImage({
+        source,
+        width: toDim(attrs.width),
+        height: toDim(attrs.height),
+        byteLength: bytes.length,
+    })
+    if (route === 'passthrough') {
+        return false
+    }
+    if (route === 'advanced' && ctx.imageScrub && ctx.teamId != null && ctx.imageScrubJobs) {
+        attrs[name] = placeholder // fail-safe until the reference is written in place after the emit
+        ctx.imageScrubJobs.push({
+            bytes,
+            apply: (ref) => {
+                attrs[name] = ref
+            },
+        })
+        return true
+    }
+    // cheap: existing in-process blur (also the fallback when ports/team are absent)
     const original = value
-    attrs[name] = BLANK_IMAGE_DATA_URI
+    attrs[name] = placeholder
     ctx.blurJobs?.push(async () => {
         const blurred = await blurImageDataUri(original)
         if (blurred !== null) {
@@ -56,7 +112,22 @@ export function blurInlineImageAttr(ctx: ScrubContext, attrs: Record<string, unk
     return true
 }
 
-/** Replace a media element's source attrs with the placeholder (queuing a blur job for data-images). */
+/**
+ * Scrub an inlined-image data URI held in an attribute (a `<canvas>`/`<img>` `rr_dataURL`). Canvas is
+ * dynamic (routed cheap); a static <img>'s inline pixels take the advanced topic path when wired.
+ * Returns whether it acted.
+ */
+export function blurInlineImageAttr(
+    ctx: ScrubContext,
+    attrs: Record<string, unknown>,
+    name: string,
+    source: ImageSource = 'canvas'
+): boolean {
+    return scrubInlineImage(ctx, attrs, name, source, BLANK_IMAGE_DATA_URI)
+}
+
+/** Replace a media element's source attrs with the placeholder (routing inline data-images to the
+ *  scrub topic or the in-process blur; remote srcs are host+path scrubbed and stashed). */
 export function applyBlur(ctx: ScrubContext, attrs: Record<string, unknown>): void {
     for (const key of MEDIA_SRC_ATTRS) {
         const existing = attrs[key]
@@ -64,13 +135,7 @@ export function applyBlur(ctx: ScrubContext, attrs: Record<string, unknown>): vo
             continue
         }
         if (isImageDataUri(existing)) {
-            attrs[key] = PLACEHOLDER_SRC
-            ctx.blurJobs?.push(async () => {
-                const blurred = await blurImageDataUri(existing)
-                if (blurred !== null) {
-                    attrs[key] = blurred
-                }
-            })
+            scrubInlineImage(ctx, attrs, key, 'media', PLACEHOLDER_SRC)
         } else {
             // Stash the scrubbed original under a namespaced attr (won't collide with app
             // `data-original-*`), host-scrubbed too so the CDN host can't leak.
