@@ -59,6 +59,7 @@ describe('createResolveRetentionStep', () => {
 
         const results = await step([element(1, 'a'), element(2, 'b')])
 
+        expect(mockRetentionService.resolveSessionRetentions).toHaveBeenCalledTimes(1)
         expect(resolvedSessions()).toEqual([
             { teamId: 1, sessionId: 'a' },
             { teamId: 2, sessionId: 'b' },
@@ -76,6 +77,7 @@ describe('createResolveRetentionStep', () => {
         const results = await step([element(1, 'a'), element(1, 'a'), element(1, 'a')])
 
         // The three copies dedupe to one session before the service is asked.
+        expect(mockRetentionService.resolveSessionRetentions).toHaveBeenCalledTimes(1)
         expect(resolvedSessions()).toEqual([{ teamId: 1, sessionId: 'a' }])
         expect(results.map((r) => (isOkResult(r) ? r.value.retentionPeriod : null))).toEqual(['30d', '30d', '30d'])
     })
@@ -91,6 +93,7 @@ describe('createResolveRetentionStep', () => {
         const results = await step([element(1, 'a'), element(2, 'b')])
 
         // Only the unseen session is sent to the service.
+        expect(mockRetentionService.resolveSessionRetentions).toHaveBeenCalledTimes(1)
         expect(resolvedSessions()).toEqual([{ teamId: 2, sessionId: 'b' }])
         expect(results.map((r) => (isOkResult(r) ? r.value.retentionPeriod : null))).toEqual(['90d', '1y'])
     })
@@ -101,7 +104,7 @@ describe('createResolveRetentionStep', () => {
 
         const results = await step([element(1, 'a'), element(2, 'b')])
 
-        expect(resolvedSessions()).toEqual([])
+        expect(mockRetentionService.resolveSessionRetentions).not.toHaveBeenCalled()
         expect(results.map((r) => (isOkResult(r) ? r.value.retentionPeriod : null))).toEqual(['30d', '30d'])
     })
 
@@ -115,6 +118,11 @@ describe('createResolveRetentionStep', () => {
 
         const results = await step([element(999, 'gone'), element(2, 'ok')])
 
+        expect(mockRetentionService.resolveSessionRetentions).toHaveBeenCalledTimes(1)
+        expect(resolvedSessions()).toEqual([
+            { teamId: 999, sessionId: 'gone' },
+            { teamId: 2, sessionId: 'ok' },
+        ])
         expect(results[0].type).toBe(PipelineResultType.DROP)
         expect(isOkResult(results[1]) ? results[1].value.retentionPeriod : null).toBe('90d')
         expect(SessionBatchMetrics.incrementSessionsDroppedMissingRetention).toHaveBeenCalledTimes(1)
@@ -125,6 +133,8 @@ describe('createResolveRetentionStep', () => {
         const step = createStep()
 
         await expect(step([element(1, 'a')])).rejects.toThrow('Redis connection lost')
+        expect(mockRetentionService.resolveSessionRetentions).toHaveBeenCalledTimes(1)
+        expect(resolvedSessions()).toEqual([{ teamId: 1, sessionId: 'a' }])
         expect(SessionBatchMetrics.incrementSessionsDroppedMissingRetention).not.toHaveBeenCalled()
     })
 })
