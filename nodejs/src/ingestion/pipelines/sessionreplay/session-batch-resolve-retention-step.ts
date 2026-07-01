@@ -4,8 +4,8 @@ import { ProcessingStep } from '~/ingestion/framework/steps'
 import { RetentionMap } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-map'
 import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 
+import { SessionBatchContext } from './session-batch-context'
 import { SessionBatchMetrics } from './sessions/metrics'
-import { SessionBatchContext } from './sessions/session-batch-recorder'
 
 /**
  * Flush step: resolve per-session retention off the S3 write path.

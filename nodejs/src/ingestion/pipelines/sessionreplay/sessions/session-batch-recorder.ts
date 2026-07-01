@@ -66,15 +66,6 @@ import { SnappySessionRecorder } from './snappy-session-recorder'
  * This format allows efficient access to individual session recordings within a batch,
  * as only the relevant session block needs to be retrieved and decompressed.
  */
-
-/**
- * Batch context attached to every element of an accumulation cycle and to the flush units.
- * Carries the recorder that the record step folds into and that the flush step drains.
- */
-export interface SessionBatchContext {
-    sessionBatchRecorder: SessionBatchRecorder
-}
-
 export class SessionBatchRecorder {
     private readonly partitionSessions = new Map<
         number,

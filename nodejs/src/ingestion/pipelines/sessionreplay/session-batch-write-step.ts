@@ -2,7 +2,7 @@ import { ok } from '~/ingestion/framework/results'
 import { ProcessingStep } from '~/ingestion/framework/steps'
 import { SessionBlockMetadata } from '~/ingestion/pipelines/sessionreplay/shared/metadata/session-block-metadata'
 
-import { SessionBatchContext } from './sessions/session-batch-recorder'
+import { SessionBatchContext } from './session-batch-context'
 import { RetentionMap } from './shared/retention/retention-map'
 
 /**

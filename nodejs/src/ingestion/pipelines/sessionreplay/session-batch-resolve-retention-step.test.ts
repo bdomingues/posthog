@@ -2,9 +2,10 @@ import { AccumulationContext } from '~/ingestion/framework/accumulating-pipeline
 import { isOkResult } from '~/ingestion/framework/results'
 import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 
+import { SessionBatchContext } from './session-batch-context'
 import { createResolveRetentionStep } from './session-batch-resolve-retention-step'
 import { SessionBatchMetrics } from './sessions/metrics'
-import { SessionBatchContext, SessionBatchRecorder } from './sessions/session-batch-recorder'
+import { SessionBatchRecorder } from './sessions/session-batch-recorder'
 
 jest.mock('~/common/utils/logger', () => ({ logger: { warn: jest.fn() } }))
 jest.mock('./sessions/metrics', () => ({
