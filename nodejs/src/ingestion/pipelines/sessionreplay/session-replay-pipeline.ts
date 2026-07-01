@@ -138,7 +138,6 @@ export function createSessionReplayPipeline(
                                             )
                                             // Monitor library version and emit warnings for old versions
                                             .pipe(createLibVersionMonitorStep())
-                                            // Record to session batch (uses the resolved retention)
                                             .pipe(
                                                 topHogWrapper(
                                                     createRecordSessionEventStep({
