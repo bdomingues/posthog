@@ -22,11 +22,14 @@ export async function ensureTopic(kafka: Kafka, topic: string): Promise<void> {
 }
 
 export function makeS3(cfg: Config): S3Client {
+    const { accessKeyId, secretAccessKey } = cfg.s3
     return new S3Client({
         endpoint: cfg.s3.endpoint,
         region: cfg.s3.region,
         forcePathStyle: true, // required for SeaweedFS / MinIO
-        credentials: { accessKeyId: cfg.s3.accessKeyId, secretAccessKey: cfg.s3.secretAccessKey },
+        // Use static keys only when both are provided (local dev); otherwise omit them so the SDK's
+        // default credential chain resolves the IRSA role in-cluster — never fall back to dev creds.
+        ...(accessKeyId && secretAccessKey ? { credentials: { accessKeyId, secretAccessKey } } : {}),
     })
 }
 
@@ -52,9 +55,11 @@ export async function s3Exists(s3: S3Client, bucket: string, key: string): Promi
         return true
     } catch (e) {
         const status = (e as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
-        if (status === 404 || status === 403) {
+        if (status === 404) {
             return false
         }
+        // Only 404 means "absent". A 403 is a permissions problem (missing s3:HeadObject, bad policy):
+        // surfacing it fails loudly instead of masking the misconfig as a cache miss and re-scrubbing.
         throw e
     }
 }

@@ -10,30 +10,18 @@
  * scrub consumer later writes the scrubbed image to S3 under the reference. Redis presence means only
  * "posted to the topic recently" (dedup), NOT "scrubbed image exists in S3".
  *
- * Ports are injected so the concrete Redis/Kafka wiring lives at the ml-mirror server and this stays
- * unit-testable. Kept in sync with the consumer package's producer.ts (see content-ref.ts CONTRACT).
+ * The reserve/release/produce operations are injected as plain functions so this stays pure and
+ * unit-testable; the ml-mirror server wires them to the Redis pool (redis-dedup.ts) and the Kafka
+ * producer. Kept in sync with the consumer package's content-ref (see content-ref.ts CONTRACT).
  */
 import { hashImageBytes, imageRef } from './content-ref'
+import { ImageScrubMetrics } from './metrics'
 
 export const DEDUP_TTL_SECONDS = 24 * 60 * 60 // 24h window; ~2.6GB raw keys at 20M/day, fits a 10GB Redis
-
-export interface DedupStore {
-    /** Reserve every key that's absent, in ONE round-trip (pipeline of SET NX EX). Returns, per key
-     *  in order, whether we reserved it (true = first sighting). Duplicate keys within the batch
-     *  resolve correctly: the first is fresh, the rest see it already set. */
-    reserveBatch(keys: string[], ttlSeconds: number): Promise<boolean[]>
-    /** Release reservations in ONE round-trip (pipeline of DEL) — used to roll back a failed produce. */
-    releaseBatch(keys: string[]): Promise<void>
-}
 
 export interface TopicMessage {
     key: string
     value: Buffer
-}
-
-export interface TopicProducer {
-    /** Post all messages in ONE send; resolves only once the broker has acked them. */
-    produceBatch(messages: TopicMessage[]): Promise<void>
 }
 
 export interface ImageInput {
@@ -41,9 +29,14 @@ export interface ImageInput {
     bytes: Buffer
 }
 
-export interface ProducerDeps {
-    dedup: DedupStore
-    producer: TopicProducer
+/** Injected side-effects: batched Redis reserve/release + a batched topic produce. */
+export interface ImageScrubEmitDeps {
+    /** Reserve keys in one round-trip; returns per-key whether it was fresh (true = post it). */
+    reserve: (keys: string[], ttlSeconds: number) => Promise<boolean[]>
+    /** Release reservations in one round-trip (rollback of a failed produce). */
+    release: (keys: string[]) => Promise<void>
+    /** Post all messages; resolves only once the broker has acked them. */
+    produce: (messages: TopicMessage[]) => Promise<void>
     ttlSeconds?: number
 }
 
@@ -62,14 +55,14 @@ export interface EmitResult {
  * rollback — the fail-closed ml-mirror then drops the message rather than record references whose
  * images never made it onto the topic.
  */
-export async function emitImagesForScrub(images: ImageInput[], deps: ProducerDeps): Promise<EmitResult[]> {
+export async function emitImagesForScrub(images: ImageInput[], deps: ImageScrubEmitDeps): Promise<EmitResult[]> {
     if (images.length === 0) {
         return []
     }
     const refs = images.map((img) => imageRef(img.teamId, hashImageBytes(img.bytes)))
     const ttl = deps.ttlSeconds ?? DEDUP_TTL_SECONDS
 
-    const fresh = await deps.dedup.reserveBatch(refs, ttl) // one round-trip
+    const fresh = await deps.reserve(refs, ttl) // one round-trip
 
     const toPost: TopicMessage[] = []
     for (let i = 0; i < images.length; i++) {
@@ -79,9 +72,13 @@ export async function emitImagesForScrub(images: ImageInput[], deps: ProducerDep
     }
     if (toPost.length > 0) {
         try {
-            await deps.producer.produceBatch(toPost) // one send
+            await deps.produce(toPost) // one send
         } catch (err) {
-            await deps.dedup.releaseBatch(toPost.map((m) => m.key)).catch(() => {})
+            // Roll back the reservations so later sightings retry; if the rollback itself fails (Redis
+            // down) the keys sit until the TTL and dedup those images away — meter it so it's visible.
+            await deps
+                .release(toPost.map((m) => m.key))
+                .catch(() => ImageScrubMetrics.incrementReservationRollbackFailure())
             throw err
         }
     }

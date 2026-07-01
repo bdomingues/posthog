@@ -10,8 +10,9 @@
  *
  * CONTRACT: this MUST stay byte-identical to the consumer's copy at
  * products/replay_vision/services/ml-mirror-image-scrub/src/content-ref.ts, or references won't
- * resolve. The shared golden vectors in image-scrub-contract.json pin it on both sides. Stage 2
- * should extract a single shared package and delete this duplicate.
+ * resolve. Both sides assert the same hardcoded golden vector (input -> hash/ref) — image-scrub.test.ts
+ * here and dev/content-ref.test.ts there — so a unilateral change to either copy fails its own test;
+ * change them together. Stage 2 should extract a single shared package and delete this duplicate.
  */
 import { createHash } from 'node:crypto'
 

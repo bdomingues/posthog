@@ -22,9 +22,9 @@ import {
 } from '~/ingestion/pipelines/sessionreplay/consumer'
 import { MlMirrorConfig, getDefaultMlMirrorConfig } from '~/ingestion/pipelines/sessionreplay/ml-mirror/config'
 import {
-    KafkaWrapperTopicProducer,
-    RedisPoolDedupStore,
-} from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/ports'
+    releaseImageKeys,
+    reserveImageKeys,
+} from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/redis-dedup'
 import { MlBlockMetadataSink } from '~/ingestion/pipelines/sessionreplay/ml-mirror/ml-block-metadata-sink'
 import { createMlMirrorReplayPipeline } from '~/ingestion/pipelines/sessionreplay/ml-mirror/ml-mirror-pipeline'
 import { resolvePseudonymKey } from '~/ingestion/pipelines/sessionreplay/ml-mirror/pseudonym-key'
@@ -125,12 +125,23 @@ export class IngestionSessionReplayMlMirrorServer implements NodeServer {
         // separate consumer worker scrubs them to S3. Off by default (kill-switch) so the producer path
         // stays inert until the consumer is live; when off, those images fall back to the in-process blur.
         if (this.config.SESSION_RECORDING_ML_IMAGE_SCRUB_ENABLED) {
+            const redisPool = pools.redisPool
+            const producer = this.producerRegistry.getProducer(INGESTION_SESSIONREPLAY_PRODUCER)
             scrubContext.imageScrub = {
-                dedup: new RedisPoolDedupStore(pools.redisPool),
-                producer: new KafkaWrapperTopicProducer(
-                    this.producerRegistry.getProducer(INGESTION_SESSIONREPLAY_PRODUCER),
-                    KAFKA_SESSION_REPLAY_IMAGE_SCRUB
-                ),
+                reserve: (keys, ttlSeconds) => reserveImageKeys(redisPool, keys, ttlSeconds),
+                release: (keys) => releaseImageKeys(redisPool, keys),
+                // One produce per fresh image; resolves once the broker acks them all.
+                produce: async (messages) => {
+                    await Promise.all(
+                        messages.map((m) =>
+                            producer.produce({
+                                topic: KAFKA_SESSION_REPLAY_IMAGE_SCRUB,
+                                key: Buffer.from(m.key),
+                                value: m.value,
+                            })
+                        )
+                    )
+                },
             }
         }
 

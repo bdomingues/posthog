@@ -16,6 +16,9 @@ export type ImageSource = 'canvas' | 'img' | 'media'
 export type ScrubRoute = 'passthrough' | 'cheap' | 'advanced'
 
 export const TINY_MAX_SIDE = 16 // <= this on the long side => below the face/text detector floor
+// A genuine <=16px image is a few hundred bytes; require the bytes to be small too, so a crafted tiny
+// width/height (attacker/SDK-controlled rrweb attrs) can't force a large PII image through passthrough.
+export const TINY_MAX_BYTES = 4096
 export const TOPIC_MAX_BYTES = 900_000 // under Kafka's ~1MB message cap, leaving room for the envelope
 
 export interface RouteInput {
@@ -28,9 +31,15 @@ export interface RouteInput {
 }
 
 export function routeImage(i: RouteInput): ScrubRoute {
-    // 1. Tiny + high-signal + below the detector floor -> keep as-is. Only when we actually know the
-    //    dimensions; an unknown-size image is scrubbed rather than risk passing something through.
-    if (i.width != null && i.height != null && Math.max(i.width, i.height) <= TINY_MAX_SIDE) {
+    // 1. Tiny + high-signal + below the detector floor -> keep as-is. Requires BOTH the declared
+    //    dimensions and the actual byte size to be tiny: dimensions come from untrusted rrweb attrs,
+    //    so the byte floor stops a crafted 1x1 from shielding a large image. Unknown-size => scrubbed.
+    if (
+        i.width != null &&
+        i.height != null &&
+        Math.max(i.width, i.height) <= TINY_MAX_SIDE &&
+        i.byteLength <= TINY_MAX_BYTES
+    ) {
         return 'passthrough'
     }
     // 2. Canvas is dynamic and dedups ~never -> cheap in-process blur instead of flooding the topic.

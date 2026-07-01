@@ -1,6 +1,7 @@
 /** Routes each parsed rrweb event to the right scrubber by type/source. */
 import { logger } from '~/common/utils/logger'
 import { ParsedMessageData } from '~/ingestion/pipelines/sessionreplay/kafka/types'
+import { ImageScrubMetrics } from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/metrics'
 import { emitImagesForScrub } from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/producer'
 import { RRWebEventSource, RRWebEventType } from '~/ingestion/pipelines/sessionreplay/rrweb-types'
 
@@ -54,7 +55,10 @@ export async function anonymizeParsedMessage(
                 ctx.imageScrub
             )
             imageScrubJobs.forEach((job, i) => job.apply(results[i].ref))
+            const posted = results.filter((r) => r.posted).length
+            ImageScrubMetrics.observeEmit(posted, results.length - posted)
         } catch (error) {
+            ImageScrubMetrics.incrementEmitFailure()
             logger.warn('🙈', 'image_scrub_emit_failed', { error: String(error) })
             return { failed: true }
         }

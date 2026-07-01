@@ -1,4 +1,4 @@
-import { DedupStore, TopicProducer } from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/producer'
+import { ImageScrubEmitDeps } from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/producer'
 
 import { AllowLists } from './allow-lists'
 
@@ -17,14 +17,6 @@ export interface ImageScrubJob {
     apply: (ref: string) => void
 }
 
-/** Injected Redis/Kafka ports for the image-scrub topic. Present only in the ml-mirror pipeline —
- *  when absent, advanced-route images fall back to the in-process blur, so other pipelines are
- *  unaffected. */
-export interface ImageScrubPorts {
-    dedup: DedupStore
-    producer: TopicProducer
-}
-
 /** Per-scrub context: the active allow lists plus tunables read by the scrubbers. */
 export interface ScrubContext {
     allow: AllowLists
@@ -32,9 +24,10 @@ export interface ScrubContext {
     blurJobs?: BlurJob[]
     /** Team id of the message being scrubbed — needed to build team-scoped image references. */
     teamId?: number
-    /** Image-scrub topic ports; when set (ml-mirror pipeline), advanced-route images are hashed,
-     *  referenced, and emitted to the topic instead of blurred in-process. */
-    imageScrub?: ImageScrubPorts
+    /** Image-scrub emit dependencies (Redis dedup + Kafka produce); present only in the ml-mirror
+     *  pipeline. When set, advanced-route images are hashed, referenced, and emitted to the scrub
+     *  topic; when absent, they fall back to the in-process blur so other pipelines are unaffected. */
+    imageScrub?: ImageScrubEmitDeps
     /** Collector for advanced-route images awaiting a batched emit (see {@link ImageScrubJob}). */
     imageScrubJobs?: ImageScrubJob[]
 }

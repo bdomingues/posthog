@@ -41,6 +41,7 @@ src/  (production — ships)
   clients.ts      S3 helpers + idempotent topic-ensure (no Redis; dedup is producer-side)
   config.ts       env-driven runtime config
   content-ref.ts  the shared contract: parse image:{team}:{hash} -> S3 key (matches the producer)
+  metrics.ts      prom-client counters + a /metrics server (scrubbed/failed/mismatch/skip)
 
 dev/  (non-production)
   content-ref.test.ts   pins the image:{team}:{hash} contract with the producer (npm run test:unit)

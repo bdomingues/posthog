@@ -8,8 +8,9 @@
 # dep set, so the image stays lean. kafkajs is pure JS (no librdkafka), sharp ships prebuilt libvips,
 # and there is no browser or ML runtime here.
 #
-# Major-only node tag so weekly rebuilds pick up the latest 24.x (node + bundled OpenSSL/V8 patches);
-# -bookworm-slim so glibc matches sharp's prebuilt binaries.
+# Major-only node tag so a rebuild picks up the latest 24.x (node + bundled OpenSSL/V8 patches);
+# -bookworm-slim so glibc matches sharp's prebuilt binaries. (No weekly cron yet — the base only
+# refreshes when the image is rebuilt; add a schedule trigger to the workflow if that's not enough.)
 FROM node:24-bookworm-slim
 WORKDIR /code/app
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]

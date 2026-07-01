@@ -1,9 +1,14 @@
 /** Media detection + placeholder/blur dispatch. */
 import { ImageSource, routeImage } from '~/ingestion/pipelines/sessionreplay/ml-mirror/image-scrub/routing'
 
-import { BLANK_IMAGE_DATA_URI, blurImageDataUri, isImageDataUri } from './blur'
+import { BLANK_IMAGE_DATA_URI, blurImageBytes, isImageDataUri } from './blur'
 import { ScrubContext } from './config'
 import { scrubUrl } from './url'
+
+// Bound how much a single message can hand off to the scrub topic, so an outlier session with many
+// large inlined images can't pin unbounded memory across the emit. Overflow falls back to cheap blur.
+const MAX_ADVANCED_IMAGES_PER_MESSAGE = 64
+const MAX_ADVANCED_BYTES_PER_MESSAGE = 32 * 1024 * 1024 // 32 MB
 
 // rrweb inlines rendered pixels (a `toDataURL()` snapshot) into this attribute — for `<canvas>`
 // in a FullSnapshot/adds, and for `<img>` when image inlining is on. It holds raw drawn content.
@@ -38,7 +43,30 @@ export function hasMediaSrcAttr(attrs: Record<string, unknown>): boolean {
     return MEDIA_SRC_ATTRS.some((name) => Object.prototype.hasOwnProperty.call(attrs, name))
 }
 
-/** Raw bytes of an image data URI's base64 payload, or null if it isn't a base64 image data URI. */
+/** True if the bytes start with a known raster-image magic (PNG/JPEG/GIF/WEBP/BMP). The `data:image/…`
+ *  header is attacker-controlled, so this rejects a bogus base64 payload that would otherwise be posted
+ *  to the topic only to fail decode downstream. rrweb inlines PNG/JPEG/WEBP, all covered here. */
+function looksLikeRasterImage(b: Buffer): boolean {
+    if (b.length < 12) {
+        return false
+    }
+    const png = b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
+    const jpeg = b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff
+    const gif = b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38
+    const webp =
+        b[0] === 0x52 &&
+        b[1] === 0x49 &&
+        b[2] === 0x46 &&
+        b[3] === 0x46 &&
+        b[8] === 0x57 &&
+        b[9] === 0x45 &&
+        b[10] === 0x42 &&
+        b[11] === 0x50
+    const bmp = b[0] === 0x42 && b[1] === 0x4d
+    return png || jpeg || gif || webp || bmp
+}
+
+/** Raw bytes of an image data URI's base64 payload, or null if it isn't a base64 raster image. */
 function imageDataUriBytes(dataUri: string): Buffer | null {
     const comma = dataUri.indexOf(',')
     if (comma < 0) {
@@ -48,7 +76,8 @@ function imageDataUriBytes(dataUri: string): Buffer | null {
     if (!meta.includes('base64') || !meta.startsWith('image/')) {
         return null
     }
-    return Buffer.from(dataUri.slice(comma + 1), 'base64')
+    const bytes = Buffer.from(dataUri.slice(comma + 1), 'base64')
+    return looksLikeRasterImage(bytes) ? bytes : null
 }
 
 /** Coerce an rrweb width/height attribute (number or numeric string) to a positive number, else undefined. */
@@ -90,9 +119,14 @@ function scrubInlineImage(
     if (route === 'passthrough') {
         return false
     }
-    if (route === 'advanced' && ctx.imageScrub && ctx.teamId != null && ctx.imageScrubJobs) {
+    const jobs = ctx.imageScrubJobs
+    const underCap =
+        jobs != null &&
+        jobs.length < MAX_ADVANCED_IMAGES_PER_MESSAGE &&
+        jobs.reduce((n, j) => n + j.bytes.length, bytes.length) <= MAX_ADVANCED_BYTES_PER_MESSAGE
+    if (route === 'advanced' && ctx.imageScrub && ctx.teamId != null && jobs != null && underCap) {
         attrs[name] = placeholder // fail-safe until the reference is written in place after the emit
-        ctx.imageScrubJobs.push({
+        jobs.push({
             bytes,
             apply: (ref) => {
                 attrs[name] = ref
@@ -100,11 +134,11 @@ function scrubInlineImage(
         })
         return true
     }
-    // cheap: existing in-process blur (also the fallback when ports/team are absent)
-    const original = value
+    // cheap: in-process blur — for canvas/oversize, when ports/team are absent, or over the per-message
+    // cap. Reuses the already-decoded bytes (no second base64 decode).
     attrs[name] = placeholder
     ctx.blurJobs?.push(async () => {
-        const blurred = await blurImageDataUri(original)
+        const blurred = await blurImageBytes(bytes)
         if (blurred !== null) {
             attrs[name] = blurred
         }

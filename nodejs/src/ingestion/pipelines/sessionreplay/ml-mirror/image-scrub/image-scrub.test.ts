@@ -1,43 +1,56 @@
 import { hashImageBytes, imageRef, isImageRef } from './content-ref'
-import { type DedupStore, type ImageInput, type TopicMessage, type TopicProducer, emitImagesForScrub } from './producer'
+import { type ImageInput, type ImageScrubEmitDeps, type TopicMessage, emitImagesForScrub } from './producer'
 import { routeImage } from './routing'
 
-/** In-memory dedup that counts round-trips, so we can assert one call per batch. Mirrors the ordered
- *  semantics of a Redis SET NX pipeline: within one batch the first occurrence of a key is fresh. */
-class FakeDedup implements DedupStore {
-    keys = new Map<string, number>()
-    reserveCalls = 0
-    releaseCalls = 0
-    reserveBatch(keys: string[], ttl: number): Promise<boolean[]> {
-        this.reserveCalls++
-        return Promise.resolve(
-            keys.map((k) => {
-                if (this.keys.has(k)) {
-                    return false
-                }
-                this.keys.set(k, ttl)
-                return true
-            })
-        )
+/** In-memory reserve/release/produce that counts round-trips, so we can assert one call per batch.
+ *  Mirrors the ordered semantics of a Redis SET NX pipeline: within one batch the first occurrence of
+ *  a key is fresh. */
+function fakeDeps(): {
+    deps: ImageScrubEmitDeps
+    keys: Map<string, number>
+    sent: TopicMessage[]
+    calls: { reserve: number; release: number; produce: number }
+    failProduce: () => void
+    healProduce: () => void
+} {
+    const keys = new Map<string, number>()
+    const sent: TopicMessage[] = []
+    const calls = { reserve: 0, release: 0, produce: 0 }
+    let produceFails = false
+    const deps: ImageScrubEmitDeps = {
+        reserve: (ks, ttl) => {
+            calls.reserve++
+            return Promise.resolve(
+                ks.map((k) => {
+                    if (keys.has(k)) {
+                        return false
+                    }
+                    keys.set(k, ttl)
+                    return true
+                })
+            )
+        },
+        release: (ks) => {
+            calls.release++
+            ks.forEach((k) => keys.delete(k))
+            return Promise.resolve()
+        },
+        produce: (messages) => {
+            calls.produce++
+            if (produceFails) {
+                return Promise.reject(new Error('broker down'))
+            }
+            sent.push(...messages)
+            return Promise.resolve()
+        },
     }
-    releaseBatch(keys: string[]): Promise<void> {
-        this.releaseCalls++
-        keys.forEach((k) => this.keys.delete(k))
-        return Promise.resolve()
-    }
-}
-
-class FakeProducer implements TopicProducer {
-    sent: TopicMessage[] = []
-    produceCalls = 0
-    fail = false
-    produceBatch(messages: TopicMessage[]): Promise<void> {
-        this.produceCalls++
-        if (this.fail) {
-            return Promise.reject(new Error('broker down'))
-        }
-        this.sent.push(...messages)
-        return Promise.resolve()
+    return {
+        deps,
+        keys,
+        sent,
+        calls,
+        failProduce: () => (produceFails = true),
+        healProduce: () => (produceFails = false),
     }
 }
 
@@ -75,6 +88,13 @@ describe('ml-mirror/image-scrub', () => {
             expect(routeImage({ source: 'canvas', width: 10, height: 10, byteLength: 200 })).toBe('passthrough')
         })
 
+        it('does NOT pass through a large image with crafted tiny dimensions (byte floor)', () => {
+            // rrweb width/height are attacker-controlled; a 1x1 declared on a 900KB image must still be
+            // scrubbed, not passed through unredacted.
+            expect(routeImage({ source: 'img', width: 1, height: 1, byteLength: 900_000 })).toBe('advanced')
+            expect(routeImage({ source: 'img', width: 16, height: 16, byteLength: 50_000 })).toBe('advanced')
+        })
+
         it('routes canvas to the cheap in-process blur (dynamic, no dedup)', () => {
             expect(routeImage({ source: 'canvas', width: 800, height: 600, byteLength: 5000 })).toBe('cheap')
         })
@@ -95,63 +115,58 @@ describe('ml-mirror/image-scrub', () => {
 
     describe('emitImagesForScrub', () => {
         it('dedups + posts in exactly ONE redis round-trip and ONE produce', async () => {
-            const dedup = new FakeDedup()
-            const producer = new FakeProducer()
+            const { deps, sent, calls } = fakeDeps()
             const images = Array.from({ length: 8 }, (_, i) => img(42, `image-${i}`))
 
-            const results = await emitImagesForScrub(images, { dedup, producer })
+            const results = await emitImagesForScrub(images, deps)
 
-            expect(dedup.reserveCalls).toBe(1) // one call per batch, regardless of image count
-            expect(producer.produceCalls).toBe(1)
+            expect(calls.reserve).toBe(1) // one call per batch, regardless of image count
+            expect(calls.produce).toBe(1)
             expect(results).toHaveLength(8)
             expect(results.every((r) => r.posted)).toBe(true)
-            expect(producer.sent).toHaveLength(8)
+            expect(sent).toHaveLength(8)
         })
 
         it('posts duplicates within a batch and across batches only once', async () => {
-            const dedup = new FakeDedup()
-            const producer = new FakeProducer()
+            const { deps, sent } = fakeDeps()
             const dup = img(42, 'same-image')
 
-            const first = await emitImagesForScrub([dup, dup, img(42, 'other')], { dedup, producer })
+            const first = await emitImagesForScrub([dup, dup, img(42, 'other')], deps)
             expect(first.map((r) => r.posted)).toEqual([true, false, true]) // 2nd is the in-batch duplicate
-            expect(producer.sent).toHaveLength(2)
+            expect(sent).toHaveLength(2)
 
-            const second = await emitImagesForScrub([dup], { dedup, producer })
+            const second = await emitImagesForScrub([dup], deps)
             expect(second[0].posted).toBe(false) // already posted in the previous batch
-            expect(producer.sent).toHaveLength(2)
+            expect(sent).toHaveLength(2)
         })
 
         it('posts the same image in two teams twice (separate dedup keys)', async () => {
-            const dedup = new FakeDedup()
-            const producer = new FakeProducer()
-            const results = await emitImagesForScrub([img(42, 'shared'), img(99, 'shared')], { dedup, producer })
+            const { deps, sent } = fakeDeps()
+            const results = await emitImagesForScrub([img(42, 'shared'), img(99, 'shared')], deps)
             expect(results.map((r) => r.posted)).toEqual([true, true])
-            expect(producer.sent).toHaveLength(2)
+            expect(sent).toHaveLength(2)
         })
 
         it('releases the batch reservations on a produce failure so later sightings can retry', async () => {
-            const dedup = new FakeDedup()
-            const producer = new FakeProducer()
-            producer.fail = true
+            const { deps, sent, calls, keys, failProduce, healProduce } = fakeDeps()
+            failProduce()
             const images = [img(42, 'a'), img(42, 'b')]
 
-            await expect(emitImagesForScrub(images, { dedup, producer })).rejects.toThrow()
-            expect(dedup.releaseCalls).toBe(1)
-            expect(dedup.keys.size).toBe(0) // both reservations rolled back
+            await expect(emitImagesForScrub(images, deps)).rejects.toThrow()
+            expect(calls.release).toBe(1)
+            expect(keys.size).toBe(0) // both reservations rolled back
 
-            producer.fail = false
-            const retry = await emitImagesForScrub(images, { dedup, producer })
+            healProduce()
+            const retry = await emitImagesForScrub(images, deps)
             expect(retry.every((r) => r.posted)).toBe(true)
-            expect(producer.sent).toHaveLength(2)
+            expect(sent).toHaveLength(2)
         })
 
         it('does no work for an empty batch', async () => {
-            const dedup = new FakeDedup()
-            const producer = new FakeProducer()
-            expect(await emitImagesForScrub([], { dedup, producer })).toEqual([])
-            expect(dedup.reserveCalls).toBe(0)
-            expect(producer.produceCalls).toBe(0)
+            const { deps, calls } = fakeDeps()
+            expect(await emitImagesForScrub([], deps)).toEqual([])
+            expect(calls.reserve).toBe(0)
+            expect(calls.produce).toBe(0)
         })
     })
 })

@@ -3,13 +3,15 @@ import { BLANK_IMAGE_DATA_URI } from './blur'
 import { ImageScrubJob, ScrubContext } from './config'
 import { defaultAllowLists } from './default-dict'
 
-// A small base64 image data URI (bytes are irrelevant to routing beyond their length).
-const DATA_URI = `data:image/png;base64,${Buffer.from('some-inlined-image-bytes').toString('base64')}`
+// A real (1x1) base64 PNG — must pass the magic-byte check in imageDataUriBytes.
+const DATA_URI =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 
-// No-op ports: these assets-level tests only exercise routing/collection, so the emit is never run.
+// No-op emit deps: these assets-level tests only exercise routing/collection, so the emit is never run.
 const NOOP_PORTS: NonNullable<ScrubContext['imageScrub']> = {
-    dedup: { reserveBatch: () => Promise.resolve([]), releaseBatch: () => Promise.resolve() },
-    producer: { produceBatch: () => Promise.resolve() },
+    reserve: () => Promise.resolve([]),
+    release: () => Promise.resolve(),
+    produce: () => Promise.resolve(),
 }
 
 /** A scrub context with the image-scrub topic ports wired. */
@@ -55,7 +57,7 @@ describe('anonymize/assets', () => {
     })
 
     it('replaces a data-image src with the placeholder', () => {
-        const attrs: Record<string, unknown> = { src: 'data:image/png;base64,AAAA' }
+        const attrs: Record<string, unknown> = { src: DATA_URI }
         applyBlur(ctx, attrs)
         expect(attrs.src).toBe(PLACEHOLDER_SRC)
         // data-image has no URL to preserve, so no stash is added.

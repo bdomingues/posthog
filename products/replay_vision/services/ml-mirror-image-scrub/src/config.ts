@@ -1,14 +1,19 @@
 /** Runtime config for the consumer worker (and the local produce CLI). Defaults point at the standard
  *  PostHog dev stack (Kafka :9092, SeaweedFS S3 :8333). Override via env in other envs. */
 
-/** The scrub topic. Keep in sync with KAFKA_SESSION_REPLAY_IMAGE_SCRUB in kafka-topics.ts + terraform. */
+/** The scrub topic. Keep in sync with KAFKA_SESSION_REPLAY_IMAGE_SCRUB in kafka-topics.ts + terraform.
+ *  The nodejs producer prefixes this with KAFKA_PREFIX, so in any env where that is non-empty the
+ *  deployment MUST set IMAGE_SCRUB_TOPIC to the same fully-resolved (prefixed) name, or the consumer
+ *  subscribes to a different topic than the producer writes to. (Empty prefix in prod today.) */
 export const IMAGE_SCRUB_TOPIC = 'session_replay_image_scrub'
 
 export interface Config {
     kafkaBrokers: string[]
     topic: string
     consumerGroup: string
-    s3: { endpoint: string; region: string; bucket: string; accessKeyId: string; secretAccessKey: string }
+    // accessKeyId/secretAccessKey are optional: when unset (production against real S3), makeS3 omits
+    // them so the AWS SDK default chain resolves the IRSA role. Set them locally for SeaweedFS/MinIO.
+    s3: { endpoint: string; region: string; bucket: string; accessKeyId?: string; secretAccessKey?: string }
 }
 
 export function loadConfig(): Config {
@@ -24,12 +29,8 @@ export function loadConfig(): Config {
             endpoint: process.env.OBJECT_STORAGE_ENDPOINT ?? process.env.S3_ENDPOINT ?? 'http://localhost:8333',
             region: process.env.S3_REGION ?? 'us-east-1',
             bucket: process.env.OBJECT_STORAGE_BUCKET ?? process.env.S3_BUCKET ?? 'posthog',
-            accessKeyId:
-                process.env.OBJECT_STORAGE_ACCESS_KEY_ID ?? process.env.S3_ACCESS_KEY_ID ?? 'object_storage_root_user',
-            secretAccessKey:
-                process.env.OBJECT_STORAGE_SECRET_ACCESS_KEY ??
-                process.env.S3_SECRET_ACCESS_KEY ??
-                'object_storage_root_password',
+            accessKeyId: process.env.OBJECT_STORAGE_ACCESS_KEY_ID ?? process.env.S3_ACCESS_KEY_ID,
+            secretAccessKey: process.env.OBJECT_STORAGE_SECRET_ACCESS_KEY ?? process.env.S3_SECRET_ACCESS_KEY,
         },
     }
 }
