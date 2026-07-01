@@ -200,6 +200,26 @@ class TestCreateFlagGateAPI(APIBaseTest):
         flag = FeatureFlag.objects.get(team=self.team, key="rollout-gated")
         assert flag.filters["groups"][0]["rollout_percentage"] == 100
 
+    def test_create_active_flag_with_rollout_under_both_policies_is_rejected(self, _mock_enabled):
+        # A create that both enables the flag AND sets its rollout trips the enable policy and the
+        # rollout-update policy at once. A single ChangeRequest carries one action's approval, and
+        # the apply path replays the whole create payload — so gating on just the enable would let
+        # the rollout change land unapproved. The gate must reject it (fail closed) and ask the
+        # caller to split the change, creating neither the flag nor a partial ChangeRequest.
+        self._enable_policy()
+        self._update_policy({"type": "before_after", "field": "rollout_percentage", "operator": ">", "value": 0})
+
+        response = self.client.post(
+            f"/api/projects/{self.team.id}/feature_flags/",
+            {"key": "born-active-rollout", "active": True, "filters": {"groups": [{"rollout_percentage": 100}]}},
+            format="json",
+        )
+
+        assert response.status_code == 400, response.content
+        assert response.json().get("code") == "policy_conflict"
+        assert not FeatureFlag.objects.filter(team=self.team, key="born-active-rollout").exists()
+        assert ChangeRequest.objects.count() == 0
+
     def test_reapplying_create_change_request_does_not_duplicate(self, _mock_enabled):
         self._enable_policy()
 

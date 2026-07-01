@@ -9,7 +9,7 @@ from rest_framework.exceptions import PermissionDenied
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.api.shared import UserBasicSerializer
 
-from products.approvals.backend.models import ChangeRequest
+from products.approvals.backend.models import ChangeRequest, ChangeRequestState
 from products.approvals.backend.scheduled_changes import gate_scheduled_change
 from products.feature_flags.backend.api.feature_flag import CanEditFeatureFlag
 from products.feature_flags.backend.models.feature_flag import FeatureFlag
@@ -265,7 +265,35 @@ class ScheduledChangeSerializer(serializers.ModelSerializer):
         # Canonicalize any legacy non-canonical record_id so the access filter keeps matching it.
         if feature_flag is not None:
             instance.record_id = str(feature_flag.id)
+
+        # Re-gate whenever the payload changes: create() only gates the payload the row is born with,
+        # so without this an editor could create an ungated schedule and then PATCH its payload to a
+        # policy-gated change, which the applier would dispatch with change_request=None (ungated).
+        if feature_flag is not None and "payload" in validated_data:
+            validated_data["change_request"] = self._regate_on_payload_change(
+                instance, feature_flag, validated_data["payload"]
+            )
+
         return super().update(instance, validated_data)
+
+    def _regate_on_payload_change(
+        self, instance: ScheduledChange, feature_flag: FeatureFlag, new_payload: dict
+    ) -> ChangeRequest | None:
+        """Re-evaluate the approval gate against a changed payload and return the CR to bind.
+
+        Expires any previously bound pending CR that the new payload no longer needs, so a stale
+        request can't be approved into applying a change the row no longer carries.
+        """
+        new_change_request = gate_scheduled_change(feature_flag, new_payload, instance.created_by)
+        existing = instance.change_request
+        if (
+            existing is not None
+            and existing.state == ChangeRequestState.PENDING
+            and (new_change_request is None or new_change_request.id != existing.id)
+        ):
+            existing.state = ChangeRequestState.EXPIRED
+            existing.save(update_fields=["state"])
+        return new_change_request
 
 
 @extend_schema(extensions={"x-product": "feature_flags"})

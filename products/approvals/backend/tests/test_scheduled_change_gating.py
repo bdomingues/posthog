@@ -190,6 +190,57 @@ class TestScheduledChangeGating(APIBaseTest):
         scheduled.refresh_from_db()
         assert scheduled.executed_at is not None
 
+    def test_patching_payload_to_gated_change_binds_pending_cr(self, _mock_enabled):
+        # create() only gates the initial payload. A schedule born harmless (a disable, ungated
+        # because no disable policy) must not become a way to apply a gated enable when its payload
+        # is later PATCHed — the update path re-runs the gate and binds a pending CR.
+        self._enable_policy()
+        flag = self._disabled_flag()
+
+        scheduled = self._schedule(
+            flag,
+            {"operation": "update_status", "value": False},
+            timezone.now() + timedelta(hours=1),
+        )
+        assert scheduled.change_request is None
+
+        response = self.client.patch(
+            f"/api/projects/{self.team.id}/scheduled_changes/{scheduled.id}/",
+            {"payload": {"operation": "update_status", "value": True}},
+            format="json",
+        )
+
+        assert response.status_code == 200, response.content
+        scheduled.refresh_from_db()
+        assert scheduled.change_request is not None
+        assert scheduled.change_request.state == ChangeRequestState.PENDING
+
+    def test_patching_payload_to_ungated_change_expires_stale_cr(self, _mock_enabled):
+        # The inverse: a gated schedule repointed at an ungated payload must drop its binding and
+        # expire the now-orphaned pending CR, so it can't be approved into applying the old change.
+        self._enable_policy()
+        flag = self._disabled_flag()
+
+        scheduled = self._schedule(
+            flag,
+            {"operation": "update_status", "value": True},
+            timezone.now() + timedelta(hours=1),
+        )
+        old_cr = scheduled.change_request
+        assert old_cr is not None and old_cr.state == ChangeRequestState.PENDING
+
+        response = self.client.patch(
+            f"/api/projects/{self.team.id}/scheduled_changes/{scheduled.id}/",
+            {"payload": {"operation": "update_status", "value": False}},
+            format="json",
+        )
+
+        assert response.status_code == 200, response.content
+        scheduled.refresh_from_db()
+        assert scheduled.change_request is None
+        old_cr.refresh_from_db()
+        assert old_cr.state == ChangeRequestState.EXPIRED
+
     def test_approved_then_stale_cr_is_not_applied(self, _mock_enabled):
         self._enable_policy()
         flag = self._disabled_flag()

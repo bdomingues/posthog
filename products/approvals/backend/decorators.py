@@ -499,18 +499,19 @@ def approval_gate(action_refs: Union[type, str, list]):
             if not _is_approvals_enabled(organization):
                 return method(self, *args, **kwargs)
 
-            # Find first action that matches and has a policy
-            matched_action = None
-            matched_policy = None
-
+            # Collect every action that matches this change AND has an enabled policy — not just
+            # the first. The approved change is applied by replaying the full validated payload
+            # (see actions.feature_flags._apply_create / apply), so a change that trips more than one
+            # policy-backed action (e.g. a create that both enables the flag and sets its rollout)
+            # would satisfy a single policy while the other policies' gated fields sail through
+            # unapproved. Gating on only the first match reopens exactly that bypass.
+            matches: list[tuple[Any, Any]] = []
             for action_class in actions:
                 try:
                     if action_class.detect(request, self, *args, **kwargs):
                         policy = _check_policy_for_action(action_class, team, organization)
                         if policy:
-                            matched_action = action_class
-                            matched_policy = policy
-                            break
+                            matches.append((action_class, policy))
                 except Exception as e:
                     logger.error(
                         "Error in action detect()",
@@ -518,20 +519,38 @@ def approval_gate(action_refs: Union[type, str, list]):
                         exc_info=True,
                     )
 
-            if not matched_action or not matched_policy:
+            if not matches:
                 return method(self, *args, **kwargs)
 
-            # Evaluate the gate with matched action
-            result = _evaluate_gate(
-                action_class=matched_action,
-                request=request,
-                team=team,
-                organization=organization,
-                policy=matched_policy,
-                view_or_serializer=self,
-                args=args,
-                kwargs=kwargs,
-            )
+            if len(matches) > 1:
+                # A single ChangeRequest can only carry one action's approval, but the apply path
+                # replays the whole payload — so we cannot safely gate a change that needs approval
+                # under several policies at once. Reject it (fail closed) and tell the caller to
+                # split it, mirroring the multi-policy conflict handling in _evaluate_gate.
+                logger.warning(
+                    "Change matches multiple policy-backed actions",
+                    extra={"actions": [action_class.key for action_class, _ in matches]},
+                )
+                result = GateResult(
+                    action="policy_conflict",
+                    conflicting_policies=[
+                        {"id": str(policy.id), "name": str(policy), "action_key": action_class.key}
+                        for action_class, policy in matches
+                    ],
+                    error_message="This change requires approval under multiple policies",
+                )
+            else:
+                matched_action, matched_policy = matches[0]
+                result = _evaluate_gate(
+                    action_class=matched_action,
+                    request=request,
+                    team=team,
+                    organization=organization,
+                    policy=matched_policy,
+                    view_or_serializer=self,
+                    args=args,
+                    kwargs=kwargs,
+                )
 
             # Convert result to appropriate output format
             if is_serializer:
