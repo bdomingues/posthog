@@ -436,6 +436,18 @@ export const QUERY_TYPES_METADATA: Record<NodeKind, InsightTypeMetadata> = {
         icon: IconWarning,
         inMenu: false,
     },
+    [NodeKind.SurveyResponseDriversQuery]: {
+        name: 'Survey Response Drivers',
+        description: 'Events correlated with survey scores.',
+        icon: IconCorrelationAnalysis,
+        inMenu: false,
+    },
+    [NodeKind.SurveyResponseDriversActorsQuery]: {
+        name: 'Persons',
+        description: 'People behind one population cell of the survey response drivers table.',
+        icon: IconPerson,
+        inMenu: false,
+    },
     [NodeKind.RecordingsQuery]: {
         name: 'Session Recordings',
         description: 'View available recordings.',

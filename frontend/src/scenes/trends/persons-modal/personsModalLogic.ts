@@ -26,6 +26,7 @@ import {
     InsightActorsQueryOptions,
     InsightActorsQueryOptionsResponse,
     NodeKind,
+    SurveyResponseDriversActorsQuery,
     TrendsQuery,
     insightActorsQueryOptionsResponseKeys,
 } from '~/queries/schema/schema-general'
@@ -127,7 +128,13 @@ function buildFunnelBreakdownFilter(source: ActorsQuery['source'] | null): Unive
 }
 
 export interface PersonModalLogicProps {
-    query?: InsightActorsQuery | FunnelsActorsQuery | FunnelCorrelationActorsQuery | ExperimentActorsQuery | null
+    query?:
+        | InsightActorsQuery
+        | FunnelsActorsQuery
+        | FunnelCorrelationActorsQuery
+        | ExperimentActorsQuery
+        | SurveyResponseDriversActorsQuery
+        | null
     url?: string | null
     additionalSelect?: Partial<Record<keyof CommonActorType, string>>
     orderBy?: string[]

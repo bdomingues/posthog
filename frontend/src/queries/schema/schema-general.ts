@@ -108,6 +108,8 @@ export enum NodeKind {
     ErrorTrackingSimilarIssuesQuery = 'ErrorTrackingSimilarIssuesQuery',
     ErrorTrackingBreakdownsQuery = 'ErrorTrackingBreakdownsQuery',
     ErrorTrackingIssueCorrelationQuery = 'ErrorTrackingIssueCorrelationQuery',
+    SurveyResponseDriversQuery = 'SurveyResponseDriversQuery',
+    SurveyResponseDriversActorsQuery = 'SurveyResponseDriversActorsQuery',
     LogsQuery = 'LogsQuery',
     LogAttributesQuery = 'LogAttributesQuery',
     LogValuesQuery = 'LogValuesQuery',
@@ -245,6 +247,7 @@ export type AnyDataNode =
     | ErrorTrackingSimilarIssuesQuery
     | ErrorTrackingBreakdownsQuery
     | ErrorTrackingIssueCorrelationQuery
+    | SurveyResponseDriversQuery
     | LogsQuery
     | LogAttributesQuery
     | LogValuesQuery
@@ -303,6 +306,7 @@ export type QuerySchema =
     | ErrorTrackingSimilarIssuesQuery
     | ErrorTrackingBreakdownsQuery
     | ErrorTrackingIssueCorrelationQuery
+    | SurveyResponseDriversQuery
     | ExperimentFunnelsQuery
     | ExperimentTrendsQuery
     | ExperimentQuery
@@ -2357,6 +2361,7 @@ export interface ActorsQuery extends DataNode<ActorsQueryResponse> {
         | FunnelCorrelationActorsQuery
         | ExperimentActorsQuery
         | StickinessActorsQuery
+        | SurveyResponseDriversActorsQuery
         | HogQLQuery
     select?: HogQLExpression[]
     search?: string
@@ -3126,6 +3131,65 @@ export interface ErrorTrackingIssueCorrelationQueryResponse extends AnalyticsQue
 }
 export type CachedErrorTrackingIssueCorrelationQueryResponse =
     CachedQueryResponse<ErrorTrackingIssueCorrelationQueryResponse>
+
+export interface SurveyResponseDriversQuery extends DataNode<SurveyResponseDriversQueryResponse> {
+    kind: NodeKind.SurveyResponseDriversQuery
+    surveyId: string
+    /** Rating question to bucket responders by. Defaults to the survey's first NPS (0-10 rating) question. */
+    questionId?: string
+    questionIndex?: integer
+    /** Behavioral window on each side of a person's survey response. */
+    daysAroundResponse?: integer
+}
+
+export type NpsBucket = 'detractor' | 'promoter'
+
+export interface SurveyResponseDriversActorsQuery extends InsightActorsQueryBase {
+    kind: NodeKind.SurveyResponseDriversActorsQuery
+    source: SurveyResponseDriversQuery
+    /** Behavioral event of the clicked population cell. */
+    event: string
+    /** NPS bucket of the clicked population cell. */
+    bucket: NpsBucket
+    /** True for the people who performed the event, false for the bucket members who did not. */
+    performed: boolean
+}
+
+export interface SurveyResponseDriver {
+    event: string
+    odds_ratio: number
+    direction: NpsBucket
+    confidence: 'high' | 'low'
+    population: {
+        detractors_with: integer
+        detractors_without: integer
+        promoters_with: integer
+        promoters_without: integer
+    }
+}
+
+export interface SurveyResponseDriversQueryResponse extends AnalyticsQueryResponseBase {
+    results: SurveyResponseDriver[]
+    totals?: {
+        promoters: integer
+        passives: integer
+        detractors: integer
+    }
+    /** Promoter:detractor totals are more lopsided than 10:1, so odds ratios are unreliable. */
+    skewed?: boolean
+    /** Events hidden because too few sampled responders performed them. */
+    suppressedEvents?: integer
+    /** Minimum sampled responders required for an event to be reported. */
+    sampleThreshold?: integer
+    questionId?: string
+    questionIndex?: integer
+    /** True when more distinct events existed than were scanned — the ranking may be incomplete beyond the most frequent events. */
+    hasMore?: boolean
+    limit?: integer
+    offset?: integer
+    columns?: string[]
+}
+export type CachedSurveyResponseDriversQueryResponse = CachedQueryResponse<SurveyResponseDriversQueryResponse>
 
 export interface ErrorTrackingIssueFilteringToolOutput extends Pick<
     ErrorTrackingQuery,
@@ -4808,6 +4872,7 @@ export interface InsightActorsQueryOptions extends Node<InsightActorsQueryOption
         | FunnelCorrelationActorsQuery
         | StickinessActorsQuery
         | ExperimentActorsQuery
+        | SurveyResponseDriversActorsQuery
 }
 
 export interface DatabaseSchemaSchema {

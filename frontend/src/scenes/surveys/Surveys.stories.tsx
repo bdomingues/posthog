@@ -261,6 +261,39 @@ const MOCK_SURVEY_WITH_RESULTS: Survey = {
 }
 
 // Rows from the consolidated aggregate query: [question_id, label, count].
+const MOCK_SURVEY_RESPONSE_DRIVERS = {
+    columns: ['event', 'odds_ratio', 'direction', 'confidence', 'population'],
+    results: [
+        {
+            event: 'csv import failed',
+            odds_ratio: 14.0,
+            direction: 'detractor',
+            confidence: 'high',
+            population: { detractors_with: 27, detractors_without: 15, promoters_with: 6, promoters_without: 55 },
+        },
+        {
+            event: 'support ticket opened',
+            odds_ratio: 2.79,
+            direction: 'detractor',
+            confidence: 'low',
+            population: { detractors_with: 9, detractors_without: 33, promoters_with: 5, promoters_without: 56 },
+        },
+        {
+            event: 'saved view used',
+            odds_ratio: 0.158,
+            direction: 'promoter',
+            confidence: 'high',
+            population: { detractors_with: 8, detractors_without: 34, promoters_with: 38, promoters_without: 23 },
+        },
+    ],
+    totals: { promoters: 61, passives: 24, detractors: 42 },
+    skewed: false,
+    suppressedEvents: 3,
+    sampleThreshold: 3,
+    questionId: 'q-rating',
+    questionIndex: 0,
+}
+
 const MOCK_SURVEY_AGGREGATE_RESULTS = {
     columns: ['question_id', 'label', 'cnt'],
     types: [
@@ -350,6 +383,9 @@ const meta: Meta = {
                     if (body.kind == 'EventsQuery') {
                         return [200, MOCK_SURVEY_RESULTS]
                     }
+                    if (body.kind == 'SurveyResponseDriversQuery') {
+                        return [200, MOCK_SURVEY_RESPONSE_DRIVERS]
+                    }
                     return [200, MOCK_SURVEY_SHOWN]
                 },
                 // flag targeting has loaders, make sure they don't keep loading
@@ -362,6 +398,59 @@ export default meta
 
 type Story = StoryObj<{}>
 export const SurveysList: Story = {}
+
+const surveyResponseDriversMocks = mswDecorator({
+    get: {
+        [`/api/projects/:team_id/surveys/${MOCK_SURVEY_WITH_RESULTS.id}/`]: MOCK_SURVEY_WITH_RESULTS,
+        [`/api/projects/:team_id/surveys/${MOCK_SURVEY_WITH_RESULTS.id}/archived-response-uuids/`]: [],
+        '/api/projects/:team_id/surveys/responses_count/': {
+            ...MOCK_RESPONSES_COUNT,
+            [MOCK_SURVEY_WITH_RESULTS.id]: 75,
+        },
+        '/api/environments/:team_id/hog_functions/': { count: 0, results: [], next: null },
+    },
+    post: {
+        '/api/environments/:team_id/query/:kind/': async ({ request }) => {
+            const body = (await request.json()) as any
+            if (body.kind == 'SurveyResponseDriversQuery' || body?.query?.kind == 'SurveyResponseDriversQuery') {
+                return MOCK_SURVEY_RESPONSE_DRIVERS
+            }
+            const sql: string = body?.query?.query ?? ''
+            if (sql.includes('question_id, label, cnt')) {
+                return MOCK_SURVEY_AGGREGATE_RESULTS
+            }
+            if (sql.includes('BASE STATS')) {
+                return MOCK_SURVEY_BASE_STATS
+            }
+            if (sql.includes('DISMISSED AND SENT COUNT')) {
+                return { results: [[60]] }
+            }
+            return { results: [] }
+        },
+    },
+})
+
+export const SurveyResponseDriversTab: Story = {
+    parameters: {
+        pageUrl: `${urls.survey(MOCK_SURVEY_WITH_RESULTS.id)}?tab=drivers`,
+        featureFlags: ['surveys-redesigned-view', 'survey-response-drivers'],
+        testOptions: {
+            waitForSelector: '[data-attr="survey-response-drivers-table"] tbody tr',
+        },
+    },
+    decorators: [surveyResponseDriversMocks],
+}
+
+export const SurveyResponseDriversTabLegacyView: Story = {
+    parameters: {
+        pageUrl: `${urls.survey(MOCK_SURVEY_WITH_RESULTS.id)}?tab=drivers`,
+        featureFlags: ['survey-response-drivers'],
+        testOptions: {
+            waitForSelector: '[data-attr="survey-response-drivers-table"] tbody tr',
+        },
+    },
+    decorators: [surveyResponseDriversMocks],
+}
 
 export const SurveysGlobalSettings: Story = {
     parameters: {

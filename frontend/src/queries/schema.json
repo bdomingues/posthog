@@ -451,6 +451,9 @@
                             "$ref": "#/definitions/StickinessActorsQuery"
                         },
                         {
+                            "$ref": "#/definitions/SurveyResponseDriversActorsQuery"
+                        },
+                        {
                             "$ref": "#/definitions/HogQLQuery"
                         }
                     ]
@@ -852,6 +855,9 @@
                 },
                 {
                     "$ref": "#/definitions/ErrorTrackingIssueCorrelationQuery"
+                },
+                {
+                    "$ref": "#/definitions/SurveyResponseDriversQuery"
                 },
                 {
                     "$ref": "#/definitions/LogsQuery"
@@ -10614,6 +10620,142 @@
                 "last_refresh",
                 "next_allowed_client_refresh",
                 "questions",
+                "timezone"
+            ],
+            "type": "object"
+        },
+        "CachedSurveyResponseDriversQueryResponse": {
+            "additionalProperties": false,
+            "properties": {
+                "cache_key": {
+                    "type": "string"
+                },
+                "cache_target_age": {
+                    "format": "date-time",
+                    "type": "string"
+                },
+                "calculation_trigger": {
+                    "description": "What triggered the calculation of the query, leave empty if user/immediate",
+                    "type": "string"
+                },
+                "columns": {
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "error": {
+                    "description": "Query error. Returned only if 'explain' or `modifiers.debug` is true. Throws an error otherwise.",
+                    "type": "string"
+                },
+                "hasMore": {
+                    "description": "True when more distinct events existed than were scanned — the ranking may be incomplete beyond the most frequent events.",
+                    "type": "boolean"
+                },
+                "hogql": {
+                    "description": "Generated HogQL query.",
+                    "type": "string"
+                },
+                "is_cached": {
+                    "type": "boolean"
+                },
+                "last_refresh": {
+                    "format": "date-time",
+                    "type": "string"
+                },
+                "limit": {
+                    "$ref": "#/definitions/integer"
+                },
+                "modifiers": {
+                    "$ref": "#/definitions/HogQLQueryModifiers",
+                    "description": "Modifiers used when performing the query"
+                },
+                "next_allowed_client_refresh": {
+                    "format": "date-time",
+                    "type": "string"
+                },
+                "offset": {
+                    "$ref": "#/definitions/integer"
+                },
+                "query_metadata": {
+                    "type": "object"
+                },
+                "query_status": {
+                    "$ref": "#/definitions/QueryStatus",
+                    "description": "Query status indicates whether next to the provided data, a query is still running."
+                },
+                "questionId": {
+                    "type": "string"
+                },
+                "questionIndex": {
+                    "$ref": "#/definitions/integer"
+                },
+                "resolved_compare_date_range": {
+                    "$ref": "#/definitions/ResolvedDateRangeResponse",
+                    "description": "The resolved previous/comparison period date range, when comparing against another period"
+                },
+                "resolved_date_range": {
+                    "$ref": "#/definitions/ResolvedDateRangeResponse",
+                    "description": "The date range used for the query"
+                },
+                "results": {
+                    "items": {
+                        "$ref": "#/definitions/SurveyResponseDriver"
+                    },
+                    "type": "array"
+                },
+                "sampleThreshold": {
+                    "$ref": "#/definitions/integer",
+                    "description": "Minimum sampled responders required for an event to be reported."
+                },
+                "skewed": {
+                    "description": "Promoter:detractor totals are more lopsided than 10:1, so odds ratios are unreliable.",
+                    "type": "boolean"
+                },
+                "suppressedEvents": {
+                    "$ref": "#/definitions/integer",
+                    "description": "Events hidden because too few sampled responders performed them."
+                },
+                "timezone": {
+                    "type": "string"
+                },
+                "timings": {
+                    "description": "Measured timings for different parts of the query generation process",
+                    "items": {
+                        "$ref": "#/definitions/QueryTiming"
+                    },
+                    "type": "array"
+                },
+                "totals": {
+                    "additionalProperties": false,
+                    "properties": {
+                        "detractors": {
+                            "$ref": "#/definitions/integer"
+                        },
+                        "passives": {
+                            "$ref": "#/definitions/integer"
+                        },
+                        "promoters": {
+                            "$ref": "#/definitions/integer"
+                        }
+                    },
+                    "required": ["promoters", "passives", "detractors"],
+                    "type": "object"
+                },
+                "warnings": {
+                    "description": "Warnings about data warehouse sources referenced by the query whose latest sync failed, is paused, hit a billing limit, or is otherwise stale. Results may not reflect current source data. Accumulated across every HogQL execution that contributes to this response — so insights backed by warehouse tables (Trends, Funnels, etc.) receive the same warnings as raw HogQL queries.",
+                    "items": {
+                        "$ref": "#/definitions/DataWarehouseSyncWarning"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "cache_key",
+                "is_cached",
+                "last_refresh",
+                "next_allowed_client_refresh",
+                "results",
                 "timezone"
             ],
             "type": "object"
@@ -25164,6 +25306,9 @@
                         },
                         {
                             "$ref": "#/definitions/ExperimentActorsQuery"
+                        },
+                        {
+                            "$ref": "#/definitions/SurveyResponseDriversActorsQuery"
                         }
                     ]
                 },
@@ -31273,6 +31418,8 @@
                 "ErrorTrackingSimilarIssuesQuery",
                 "ErrorTrackingBreakdownsQuery",
                 "ErrorTrackingIssueCorrelationQuery",
+                "SurveyResponseDriversQuery",
+                "SurveyResponseDriversActorsQuery",
                 "LogsQuery",
                 "LogAttributesQuery",
                 "LogValuesQuery",
@@ -31621,6 +31768,10 @@
             },
             "required": ["type", "notebook_id", "content"],
             "type": "object"
+        },
+        "NpsBucket": {
+            "enum": ["detractor", "promoter"],
+            "type": "string"
         },
         "OCSVMDetectorConfig": {
             "additionalProperties": false,
@@ -34011,6 +34162,107 @@
                                 "$ref": "#/definitions/QueryTiming"
                             },
                             "type": "array"
+                        },
+                        "warnings": {
+                            "description": "Warnings about data warehouse sources referenced by the query whose latest sync failed, is paused, hit a billing limit, or is otherwise stale. Results may not reflect current source data. Accumulated across every HogQL execution that contributes to this response — so insights backed by warehouse tables (Trends, Funnels, etc.) receive the same warnings as raw HogQL queries.",
+                            "items": {
+                                "$ref": "#/definitions/DataWarehouseSyncWarning"
+                            },
+                            "type": "array"
+                        }
+                    },
+                    "required": ["results"],
+                    "type": "object"
+                },
+                {
+                    "additionalProperties": false,
+                    "properties": {
+                        "columns": {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        "error": {
+                            "description": "Query error. Returned only if 'explain' or `modifiers.debug` is true. Throws an error otherwise.",
+                            "type": "string"
+                        },
+                        "hasMore": {
+                            "description": "True when more distinct events existed than were scanned — the ranking may be incomplete beyond the most frequent events.",
+                            "type": "boolean"
+                        },
+                        "hogql": {
+                            "description": "Generated HogQL query.",
+                            "type": "string"
+                        },
+                        "limit": {
+                            "$ref": "#/definitions/integer"
+                        },
+                        "modifiers": {
+                            "$ref": "#/definitions/HogQLQueryModifiers",
+                            "description": "Modifiers used when performing the query"
+                        },
+                        "offset": {
+                            "$ref": "#/definitions/integer"
+                        },
+                        "query_status": {
+                            "$ref": "#/definitions/QueryStatus",
+                            "description": "Query status indicates whether next to the provided data, a query is still running."
+                        },
+                        "questionId": {
+                            "type": "string"
+                        },
+                        "questionIndex": {
+                            "$ref": "#/definitions/integer"
+                        },
+                        "resolved_compare_date_range": {
+                            "$ref": "#/definitions/ResolvedDateRangeResponse",
+                            "description": "The resolved previous/comparison period date range, when comparing against another period"
+                        },
+                        "resolved_date_range": {
+                            "$ref": "#/definitions/ResolvedDateRangeResponse",
+                            "description": "The date range used for the query"
+                        },
+                        "results": {
+                            "items": {
+                                "$ref": "#/definitions/SurveyResponseDriver"
+                            },
+                            "type": "array"
+                        },
+                        "sampleThreshold": {
+                            "$ref": "#/definitions/integer",
+                            "description": "Minimum sampled responders required for an event to be reported."
+                        },
+                        "skewed": {
+                            "description": "Promoter:detractor totals are more lopsided than 10:1, so odds ratios are unreliable.",
+                            "type": "boolean"
+                        },
+                        "suppressedEvents": {
+                            "$ref": "#/definitions/integer",
+                            "description": "Events hidden because too few sampled responders performed them."
+                        },
+                        "timings": {
+                            "description": "Measured timings for different parts of the query generation process",
+                            "items": {
+                                "$ref": "#/definitions/QueryTiming"
+                            },
+                            "type": "array"
+                        },
+                        "totals": {
+                            "additionalProperties": false,
+                            "properties": {
+                                "detractors": {
+                                    "$ref": "#/definitions/integer"
+                                },
+                                "passives": {
+                                    "$ref": "#/definitions/integer"
+                                },
+                                "promoters": {
+                                    "$ref": "#/definitions/integer"
+                                }
+                            },
+                            "required": ["promoters", "passives", "detractors"],
+                            "type": "object"
                         },
                         "warnings": {
                             "description": "Warnings about data warehouse sources referenced by the query whose latest sync failed, is paused, hit a billing limit, or is otherwise stale. Results may not reflect current source data. Accumulated across every HogQL execution that contributes to this response — so insights backed by warehouse tables (Trends, Funnels, etc.) receive the same warnings as raw HogQL queries.",
@@ -39294,6 +39546,9 @@
                     "$ref": "#/definitions/ErrorTrackingIssueCorrelationQuery"
                 },
                 {
+                    "$ref": "#/definitions/SurveyResponseDriversQuery"
+                },
+                {
                     "$ref": "#/definitions/ExperimentFunnelsQuery"
                 },
                 {
@@ -44540,6 +44795,228 @@
         "SurveyQuestionType": {
             "enum": ["open", "multiple_choice", "single_choice", "rating", "link"],
             "type": "string"
+        },
+        "SurveyResponseDriver": {
+            "additionalProperties": false,
+            "properties": {
+                "confidence": {
+                    "enum": ["high", "low"],
+                    "type": "string"
+                },
+                "direction": {
+                    "$ref": "#/definitions/NpsBucket"
+                },
+                "event": {
+                    "type": "string"
+                },
+                "odds_ratio": {
+                    "type": "number"
+                },
+                "population": {
+                    "additionalProperties": false,
+                    "properties": {
+                        "detractors_with": {
+                            "$ref": "#/definitions/integer"
+                        },
+                        "detractors_without": {
+                            "$ref": "#/definitions/integer"
+                        },
+                        "promoters_with": {
+                            "$ref": "#/definitions/integer"
+                        },
+                        "promoters_without": {
+                            "$ref": "#/definitions/integer"
+                        }
+                    },
+                    "required": ["detractors_with", "detractors_without", "promoters_with", "promoters_without"],
+                    "type": "object"
+                }
+            },
+            "required": ["event", "odds_ratio", "direction", "confidence", "population"],
+            "type": "object"
+        },
+        "SurveyResponseDriversActorsQuery": {
+            "additionalProperties": false,
+            "properties": {
+                "bucket": {
+                    "$ref": "#/definitions/NpsBucket",
+                    "description": "NPS bucket of the clicked population cell."
+                },
+                "event": {
+                    "description": "Behavioral event of the clicked population cell.",
+                    "type": "string"
+                },
+                "includeRecordings": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "const": "SurveyResponseDriversActorsQuery",
+                    "type": "string"
+                },
+                "modifiers": {
+                    "$ref": "#/definitions/HogQLQueryModifiers",
+                    "description": "Modifiers used when performing the query"
+                },
+                "performed": {
+                    "description": "True for the people who performed the event, false for the bucket members who did not.",
+                    "type": "boolean"
+                },
+                "response": {
+                    "$ref": "#/definitions/ActorsQueryResponse"
+                },
+                "source": {
+                    "$ref": "#/definitions/SurveyResponseDriversQuery"
+                },
+                "tags": {
+                    "$ref": "#/definitions/QueryLogTags"
+                },
+                "version": {
+                    "description": "version of the node, used for schema migrations",
+                    "type": "number"
+                }
+            },
+            "required": ["bucket", "event", "kind", "performed", "source"],
+            "type": "object"
+        },
+        "SurveyResponseDriversQuery": {
+            "additionalProperties": false,
+            "properties": {
+                "daysAroundResponse": {
+                    "$ref": "#/definitions/integer",
+                    "description": "Behavioral window on each side of a person's survey response."
+                },
+                "kind": {
+                    "const": "SurveyResponseDriversQuery",
+                    "type": "string"
+                },
+                "modifiers": {
+                    "$ref": "#/definitions/HogQLQueryModifiers",
+                    "description": "Modifiers used when performing the query"
+                },
+                "questionId": {
+                    "description": "Rating question to bucket responders by. Defaults to the survey's first NPS (0-10 rating) question.",
+                    "type": "string"
+                },
+                "questionIndex": {
+                    "$ref": "#/definitions/integer"
+                },
+                "response": {
+                    "$ref": "#/definitions/SurveyResponseDriversQueryResponse"
+                },
+                "surveyId": {
+                    "type": "string"
+                },
+                "tags": {
+                    "$ref": "#/definitions/QueryLogTags"
+                },
+                "version": {
+                    "description": "version of the node, used for schema migrations",
+                    "type": "number"
+                }
+            },
+            "required": ["kind", "surveyId"],
+            "type": "object"
+        },
+        "SurveyResponseDriversQueryResponse": {
+            "additionalProperties": false,
+            "properties": {
+                "columns": {
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "error": {
+                    "description": "Query error. Returned only if 'explain' or `modifiers.debug` is true. Throws an error otherwise.",
+                    "type": "string"
+                },
+                "hasMore": {
+                    "description": "True when more distinct events existed than were scanned — the ranking may be incomplete beyond the most frequent events.",
+                    "type": "boolean"
+                },
+                "hogql": {
+                    "description": "Generated HogQL query.",
+                    "type": "string"
+                },
+                "limit": {
+                    "$ref": "#/definitions/integer"
+                },
+                "modifiers": {
+                    "$ref": "#/definitions/HogQLQueryModifiers",
+                    "description": "Modifiers used when performing the query"
+                },
+                "offset": {
+                    "$ref": "#/definitions/integer"
+                },
+                "query_status": {
+                    "$ref": "#/definitions/QueryStatus",
+                    "description": "Query status indicates whether next to the provided data, a query is still running."
+                },
+                "questionId": {
+                    "type": "string"
+                },
+                "questionIndex": {
+                    "$ref": "#/definitions/integer"
+                },
+                "resolved_compare_date_range": {
+                    "$ref": "#/definitions/ResolvedDateRangeResponse",
+                    "description": "The resolved previous/comparison period date range, when comparing against another period"
+                },
+                "resolved_date_range": {
+                    "$ref": "#/definitions/ResolvedDateRangeResponse",
+                    "description": "The date range used for the query"
+                },
+                "results": {
+                    "items": {
+                        "$ref": "#/definitions/SurveyResponseDriver"
+                    },
+                    "type": "array"
+                },
+                "sampleThreshold": {
+                    "$ref": "#/definitions/integer",
+                    "description": "Minimum sampled responders required for an event to be reported."
+                },
+                "skewed": {
+                    "description": "Promoter:detractor totals are more lopsided than 10:1, so odds ratios are unreliable.",
+                    "type": "boolean"
+                },
+                "suppressedEvents": {
+                    "$ref": "#/definitions/integer",
+                    "description": "Events hidden because too few sampled responders performed them."
+                },
+                "timings": {
+                    "description": "Measured timings for different parts of the query generation process",
+                    "items": {
+                        "$ref": "#/definitions/QueryTiming"
+                    },
+                    "type": "array"
+                },
+                "totals": {
+                    "additionalProperties": false,
+                    "properties": {
+                        "detractors": {
+                            "$ref": "#/definitions/integer"
+                        },
+                        "passives": {
+                            "$ref": "#/definitions/integer"
+                        },
+                        "promoters": {
+                            "$ref": "#/definitions/integer"
+                        }
+                    },
+                    "required": ["promoters", "passives", "detractors"],
+                    "type": "object"
+                },
+                "warnings": {
+                    "description": "Warnings about data warehouse sources referenced by the query whose latest sync failed, is paused, hit a billing limit, or is otherwise stale. Results may not reflect current source data. Accumulated across every HogQL execution that contributes to this response — so insights backed by warehouse tables (Trends, Funnels, etc.) receive the same warnings as raw HogQL queries.",
+                    "items": {
+                        "$ref": "#/definitions/DataWarehouseSyncWarning"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": ["results"],
+            "type": "object"
         },
         "SurveyTabPosition": {
             "enum": ["top", "left", "right", "bottom"],

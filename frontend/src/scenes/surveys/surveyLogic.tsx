@@ -281,6 +281,7 @@ export type SurveyDemoData = ReturnType<typeof getDemoDataForSurvey>
 export enum SurveyTab {
     SUMMARY = 'summary',
     RESPONSES = 'responses',
+    DRIVERS = 'drivers',
     NOTIFICATIONS = 'notifications',
     HISTORY = 'history',
 }

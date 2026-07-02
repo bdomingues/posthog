@@ -5682,6 +5682,116 @@ export interface StickinessActorsQueryApi {
     version?: number | null
 }
 
+export type BucketApi = (typeof BucketApi)[keyof typeof BucketApi]
+
+export const BucketApi = {
+    Detractor: 'detractor',
+    Promoter: 'promoter',
+} as const
+
+export type ConfidenceApi = (typeof ConfidenceApi)[keyof typeof ConfidenceApi]
+
+export const ConfidenceApi = {
+    High: 'high',
+    Low: 'low',
+} as const
+
+export type DirectionApi = (typeof DirectionApi)[keyof typeof DirectionApi]
+
+export const DirectionApi = {
+    Detractor: 'detractor',
+    Promoter: 'promoter',
+} as const
+
+export interface Population1Api {
+    detractors_with: number
+    detractors_without: number
+    promoters_with: number
+    promoters_without: number
+}
+
+export interface SurveyResponseDriverApi {
+    confidence: ConfidenceApi
+    direction: DirectionApi
+    event: string
+    odds_ratio: number
+    population: Population1Api
+}
+
+export interface TotalsApi {
+    detractors: number
+    passives: number
+    promoters: number
+}
+
+export interface SurveyResponseDriversQueryResponseApi {
+    columns?: string[] | null
+    /** Query error. Returned only if 'explain' or `modifiers.debug` is true. Throws an error otherwise. */
+    error?: string | null
+    /** True when more distinct events existed than were scanned — the ranking may be incomplete beyond the most frequent events. */
+    hasMore?: boolean | null
+    /** Generated HogQL query. */
+    hogql?: string | null
+    limit?: number | null
+    /** Modifiers used when performing the query */
+    modifiers?: HogQLQueryModifiersApi | null
+    offset?: number | null
+    /** Query status indicates whether next to the provided data, a query is still running. */
+    query_status?: QueryStatusApi | null
+    questionId?: string | null
+    questionIndex?: number | null
+    /** The resolved previous/comparison period date range, when comparing against another period */
+    resolved_compare_date_range?: ResolvedDateRangeResponseApi | null
+    /** The date range used for the query */
+    resolved_date_range?: ResolvedDateRangeResponseApi | null
+    results: SurveyResponseDriverApi[]
+    /** Minimum sampled responders required for an event to be reported. */
+    sampleThreshold?: number | null
+    /** Promoter:detractor totals are more lopsided than 10:1, so odds ratios are unreliable. */
+    skewed?: boolean | null
+    /** Events hidden because too few sampled responders performed them. */
+    suppressedEvents?: number | null
+    /** Measured timings for different parts of the query generation process */
+    timings?: QueryTimingApi[] | null
+    totals?: TotalsApi | null
+    /** Warnings about data warehouse sources referenced by the query whose latest sync failed, is paused, hit a billing limit, or is otherwise stale. Results may not reflect current source data. Accumulated across every HogQL execution that contributes to this response — so insights backed by warehouse tables (Trends, Funnels, etc.) receive the same warnings as raw HogQL queries. */
+    warnings?: DataWarehouseSyncWarningApi[] | null
+}
+
+export interface SurveyResponseDriversQueryApi {
+    /** Behavioral window on each side of a person's survey response. */
+    daysAroundResponse?: number | null
+    kind?: 'SurveyResponseDriversQuery'
+    /** Modifiers used when performing the query */
+    modifiers?: HogQLQueryModifiersApi | null
+    /** Rating question to bucket responders by. Defaults to the survey's first NPS (0-10 rating) question. */
+    questionId?: string | null
+    questionIndex?: number | null
+    response?: SurveyResponseDriversQueryResponseApi | null
+    surveyId: string
+    tags?: QueryLogTagsApi | null
+    /** version of the node, used for schema migrations */
+    version?: number | null
+}
+
+export interface SurveyResponseDriversActorsQueryApi {
+    /** NPS bucket of the clicked population cell. */
+    bucket: BucketApi
+    /** Behavioral event of the clicked population cell. */
+    event: string
+    includeRecordings?: boolean | null
+    kind?: 'SurveyResponseDriversActorsQuery'
+    /** Modifiers used when performing the query */
+    modifiers?: HogQLQueryModifiersApi | null
+    /** True for the people who performed the event, false for the bucket members who did not. */
+    performed: boolean
+    response?: ActorsQueryResponseApi | null
+    source: SurveyResponseDriversQueryApi
+    tags?: QueryLogTagsApi | null
+    /** version of the node, used for schema migrations */
+    version?: number | null
+}
+
 export interface HogQLFiltersApi {
     dateRange?: DateRangeApi | null
     filterTestAccounts?: boolean | null
@@ -5824,6 +5934,7 @@ export interface ActorsQueryApi {
         | FunnelCorrelationActorsQueryApi
         | ExperimentActorsQueryApi
         | StickinessActorsQueryApi
+        | SurveyResponseDriversActorsQueryApi
         | HogQLQueryApi
         | null
     tags?: QueryLogTagsApi | null

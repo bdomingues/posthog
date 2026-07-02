@@ -71,6 +71,8 @@ import {
 
 import { SurveyResultsRefreshStatus } from '../components/SurveyResultsRefreshStatus'
 import { NEW_SURVEY } from '../constants'
+import { SurveyResponseDrivers } from '../SurveyResponseDrivers'
+import { surveyHasNpsQuestion } from '../utils'
 import { SurveyDraftContent } from './SurveyDraftContent'
 import { SurveyResultsFiltersBar } from './SurveyFilters'
 import { SurveyResponseExpandedRow } from './SurveyResponseExpandedRow'
@@ -97,6 +99,7 @@ export function SurveyViewRedesign(): JSX.Element {
     const hasMultipleProjects = currentOrganization?.teams && currentOrganization.teams.length > 1
     const surveyIdForTransfer = survey?.id && survey.id !== 'new' ? survey.id : null
     const isDraft = isSurveyDraft(survey)
+    const hasResponseDrivers = useFeatureFlag('SURVEY_RESPONSE_DRIVERS')
     const [panelTabKey, setPanelTabKey] = useState('details')
     const [sqlHelperOpen, setSqlHelperOpen] = useState(false)
     const autoOpenedDraftPanelForSurveyIdRef = useRef<string | null>(null)
@@ -447,6 +450,19 @@ export function SurveyViewRedesign(): JSX.Element {
                                       key: 'responses',
                                       label: 'Responses',
                                       content: <SurveyResponsesContent />,
+                                  },
+                              ]
+                            : []),
+                        ...(!isDraft && hasResponseDrivers && surveyHasNpsQuestion(survey)
+                            ? [
+                                  {
+                                      key: SurveyTab.DRIVERS,
+                                      label: 'Drivers',
+                                      content: (
+                                          <div className="px-4 pb-4">
+                                              <SurveyResponseDrivers surveyId={survey.id} />
+                                          </div>
+                                      ),
                                   },
                               ]
                             : []),
