@@ -30,6 +30,12 @@ BEHAVIOR_RATES: dict[str, dict[str, float]] = {
 RARE_EVENT = "beta feature toggled"
 RARE_EVENT_COUNT = 2
 
+# Planted below the sample guard entirely — min(25, 2% of scored responders) is ~2 at the
+# default seed size, so a single performer gets suppressed and the table's footer note
+# has something honest to report.
+SUPPRESSED_EVENT = "legacy exporter used"
+SUPPRESSED_EVENT_COUNT = 1
+
 BUCKET_WEIGHTS = [("detractor", 0.4), ("passive", 0.2), ("promoter", 0.4)]
 
 BUCKET_SCORES = {
@@ -101,6 +107,7 @@ class Command(BaseCommand):
 
         bucket_counts = {"detractor": 0, "passive": 0, "promoter": 0}
         rare_event_budget = RARE_EVENT_COUNT
+        suppressed_event_budget = SUPPRESSED_EVENT_COUNT
 
         for i in range(options["responders"]):
             bucket = rng.choices(
@@ -138,6 +145,9 @@ class Command(BaseCommand):
             if rare_event_budget > 0 and bucket == "detractor" and rng.random() < 0.15:
                 performed.append(RARE_EVENT)
                 rare_event_budget -= 1
+            if suppressed_event_budget > 0 and bucket == "detractor" and rng.random() < 0.1:
+                performed.append(SUPPRESSED_EVENT)
+                suppressed_event_budget -= 1
             for event in performed:
                 event_ts = response_ts + timedelta(days=rng.uniform(-8, 8))
                 create_event(
