@@ -11,6 +11,7 @@ from posthog.test.base import (
 )
 
 from parameterized import parameterized
+from rest_framework.exceptions import ValidationError
 
 from posthog.schema import ActorsQuery, SurveyResponseDriversActorsQuery, SurveyResponseDriversQuery
 
@@ -329,7 +330,7 @@ class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
     @freeze_time("2024-01-15T12:00:00Z")
     def test_requires_nps_question(self) -> None:
         survey = self._create_survey(questions=[{"id": "q-open", "type": "open", "question": "Any feedback?"}])
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValidationError):
             self._calculate(survey)
 
     @freeze_time("2024-01-15T12:00:00Z")
@@ -341,15 +342,15 @@ class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
                 NPS_QUESTION,
             ]
         )
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValidationError):
             self._calculate(survey, questionId="q-open")
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValidationError):
             self._calculate(survey, questionId="q-csat")
 
     @freeze_time("2024-01-15T12:00:00Z")
     def test_rejects_invalid_days_around_response(self) -> None:
         survey = self._create_survey()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValidationError):
             self._calculate(survey, daysAroundResponse=0)
 
     @freeze_time("2024-01-15T12:00:00Z")

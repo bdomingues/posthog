@@ -3,6 +3,8 @@ from datetime import UTC, datetime
 from functools import cached_property
 from typing import Any
 
+from rest_framework.exceptions import ValidationError
+
 from posthog.schema import (
     CachedSurveyResponseDriversQueryResponse,
     HogQLQueryResponse,
@@ -114,9 +116,9 @@ class SurveyResponseDriversQueryRunner(AnalyticsQueryRunner[SurveyResponseDriver
                     continue
                 raw = raw_by_index.get(question["index"], {})
                 if question["type"] != "rating" or raw.get("scale") != NPS_SCALE:
-                    raise ValueError("Response drivers currently supports 0-10 rating (NPS) questions only")
+                    raise ValidationError("Response drivers currently supports 0-10 rating (NPS) questions only")
                 return question
-            raise ValueError("Question not found on survey")
+            raise ValidationError("Question not found on survey")
 
         # Default to the survey's first NPS question. A missing isNpsQuestion counts as
         # NPS when the scale is 10, matching the results UI's detection.
@@ -124,7 +126,9 @@ class SurveyResponseDriversQueryRunner(AnalyticsQueryRunner[SurveyResponseDriver
             raw = raw_by_index.get(question["index"], {})
             if question["type"] == "rating" and raw.get("scale") == NPS_SCALE and raw.get("isNpsQuestion") is not False:
                 return question
-        raise ValueError("Survey has no NPS (0-10 rating) question. Pass questionId to pick a question explicitly.")
+        raise ValidationError(
+            "Survey has no NPS (0-10 rating) question. Pass questionId to pick a question explicitly."
+        )
 
     def _calculate(self) -> SurveyResponseDriversQueryResponse:
         with self.timings.measure("survey_response_drivers_totals_hogql_execute"):
@@ -237,7 +241,7 @@ class SurveyResponseDriversQueryRunner(AnalyticsQueryRunner[SurveyResponseDriver
         if days is None:
             return DEFAULT_DAYS_AROUND_RESPONSE
         if days < 1:
-            raise ValueError("daysAroundResponse must be at least 1")
+            raise ValidationError("daysAroundResponse must be at least 1")
         return days
 
     def _placeholders(self) -> tuple[dict[str, ast.Expr], str]:

@@ -125,13 +125,10 @@ export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.E
             key: 'confidence',
             align: 'center',
             tooltip:
-                'Low confidence means fewer sampled respondents performed this event than the minimum sample size.',
+                'Rows where fewer sampled respondents performed the event than the minimum sample size are flagged; a passing sample is not an endorsement of the ratio.',
             render: function RenderConfidence(_, record) {
-                return (
-                    <LemonTag type={record.confidence === 'high' ? 'default' : 'warning'}>
-                        {record.confidence === 'high' ? 'High' : 'Low'}
-                    </LemonTag>
-                )
+                // Warn-only, like funnel correlation: flag thin samples, never bless a row.
+                return record.confidence === 'low' ? <LemonTag type="warning">Low</LemonTag> : null
             },
         },
     ]

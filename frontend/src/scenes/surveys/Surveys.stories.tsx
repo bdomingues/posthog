@@ -266,21 +266,21 @@ const MOCK_SURVEY_RESPONSE_DRIVERS = {
     results: [
         {
             event: 'csv import failed',
-            odds_ratio: 5.4,
+            odds_ratio: 14.0,
             direction: 'detractor',
             confidence: 'high',
             population: { detractors_with: 27, detractors_without: 15, promoters_with: 6, promoters_without: 55 },
         },
         {
             event: 'support ticket opened',
-            odds_ratio: 2.1,
+            odds_ratio: 2.79,
             direction: 'detractor',
             confidence: 'low',
             population: { detractors_with: 9, detractors_without: 33, promoters_with: 5, promoters_without: 56 },
         },
         {
             event: 'saved view used',
-            odds_ratio: 0.31,
+            odds_ratio: 0.158,
             direction: 'promoter',
             confidence: 'high',
             population: { detractors_with: 8, detractors_without: 34, promoters_with: 38, promoters_without: 23 },

@@ -17,8 +17,8 @@ from products.surveys.backend.models import Survey
 
 # Per-bucket probability that a responder performed each behavioral event. The planted
 # correlations give the Drivers tab a clear story: detractors hit failures, promoters use
-# power features, everyone views dashboards (odds ratio ~1, dropped), and one event is
-# performed by too few people to clear the sample guard (shown as suppressed).
+# power features, everyone views dashboards (a neutral event that ranks at the bottom at
+# ~1x), and one event is performed by too few people to clear the sample guard (suppressed).
 BEHAVIOR_RATES: dict[str, dict[str, float]] = {
     "csv import failed": {"detractor": 0.65, "passive": 0.25, "promoter": 0.08},
     "support ticket opened": {"detractor": 0.35, "passive": 0.20, "promoter": 0.10},
@@ -155,7 +155,7 @@ class Command(BaseCommand):
                     event=event,
                     team=team,
                     distinct_id=distinct_id,
-                    timestamp=max(event_ts, start_date),
+                    timestamp=min(max(event_ts, start_date), now),
                     person_id=uuid.UUID(person_uuid),
                     person_properties=person_properties,
                     properties={"seeded": True},
