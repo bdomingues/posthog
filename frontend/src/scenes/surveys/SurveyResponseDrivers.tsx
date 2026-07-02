@@ -1,26 +1,25 @@
-import { useValues } from 'kea'
+import { useActions, useValues } from 'kea'
 
-import { LemonBanner, LemonTable, LemonTableColumns, LemonTag } from '@posthog/lemon-ui'
+import { LemonBanner, LemonSkeleton, LemonTable, LemonTableColumns, LemonTag } from '@posthog/lemon-ui'
 
 import { humanFriendlyNumber, percentage } from 'lib/utils/numbers'
-import { InsightEmptyState } from 'scenes/insights/EmptyStates'
+import { pluralize } from 'lib/utils/strings'
+import { InsightEmptyState, InsightErrorState } from 'scenes/insights/EmptyStates'
 
 import { SurveyResponseDriver } from '~/queries/schema/schema-general'
-import { RatingSurveyQuestion, Survey, SurveyQuestionType } from '~/types'
 
+import { NPS_DETRACTOR_LABEL, NPS_PROMOTER_LABEL } from './constants'
 import { surveyResponseDriversLogic } from './surveyResponseDriversLogic'
 
-export function surveyHasNpsQuestion(survey: Pick<Survey, 'questions'>): boolean {
-    return (survey.questions ?? []).some(
-        (question) =>
-            question.type === SurveyQuestionType.Rating &&
-            (question as RatingSurveyQuestion).scale === 10 &&
-            (question as RatingSurveyQuestion).isNpsQuestion !== false
-    )
+function strengthOf(record: SurveyResponseDriver): number {
+    return record.odds_ratio < 1 ? 1 / record.odds_ratio : record.odds_ratio
 }
 
 export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.Element {
-    const { driversResponse, driversResponseLoading } = useValues(surveyResponseDriversLogic({ surveyId }))
+    const { driversResponse, driversResponseLoading, errorLoading } = useValues(
+        surveyResponseDriversLogic({ surveyId })
+    )
+    const { loadDrivers } = useActions(surveyResponseDriversLogic({ surveyId }))
 
     const results = driversResponse?.results ?? []
     const totals = driversResponse?.totals
@@ -42,7 +41,7 @@ export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.E
             render: function RenderDirection(_, record) {
                 return (
                     <LemonTag type={record.direction === 'detractor' ? 'danger' : 'success'}>
-                        {record.direction === 'detractor' ? 'Detractors' : 'Promoters'}
+                        {record.direction === 'detractor' ? NPS_DETRACTOR_LABEL : NPS_PROMOTER_LABEL}
                     </LemonTag>
                 )
             },
@@ -92,21 +91,23 @@ export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.E
             key: 'odds_ratio',
             align: 'center',
             tooltip:
-                'Odds ratio between the two group shares, with a small-sample prior applied. Used to rank drivers.',
-            sorter: (a, b) => a.odds_ratio - b.odds_ratio,
+                'How many times more likely the correlated group was to perform this event, based on the odds ratio (adjusted for small samples). Used to rank drivers.',
+            sorter: (a, b) => strengthOf(a) - strengthOf(b),
             render: function RenderOddsRatio(_, record) {
-                const ratio = record.odds_ratio < 1 ? 1 / record.odds_ratio : record.odds_ratio
-                return <span className="text-secondary">{humanFriendlyNumber(ratio, 1)}×</span>
+                return <span className="text-lg font-medium">{humanFriendlyNumber(strengthOf(record), 1)}x</span>
             },
         },
         {
             title: 'Confidence',
             key: 'confidence',
             align: 'center',
-            tooltip: 'Low confidence means fewer sampled responders performed this event than the minimum sample size.',
+            tooltip:
+                'Low confidence means fewer sampled respondents performed this event than the minimum sample size.',
             render: function RenderConfidence(_, record) {
                 return (
-                    <LemonTag type={record.confidence === 'high' ? 'default' : 'caution'}>{record.confidence}</LemonTag>
+                    <LemonTag type={record.confidence === 'high' ? 'default' : 'warning'}>
+                        {record.confidence === 'high' ? 'High' : 'Low'}
+                    </LemonTag>
                 )
             },
         },
@@ -114,13 +115,15 @@ export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.E
 
     return (
         <div className="flex flex-col gap-4">
-            {totals && (
+            {driversResponseLoading && !driversResponse ? (
+                <LemonSkeleton className="h-4 w-96" />
+            ) : totals ? (
                 <div className="text-secondary">
                     Comparing behavior of {humanFriendlyNumber(totals.detractors)} detractors against{' '}
                     {humanFriendlyNumber(totals.promoters)} promoters ({humanFriendlyNumber(totals.passives)} passives
                     excluded from ratios).
                 </div>
-            )}
+            ) : null}
             {driversResponse?.skewed && (
                 <LemonBanner type="warning">
                     Promoter and detractor counts are heavily imbalanced, so odds ratios mostly reflect the imbalance.
@@ -128,14 +131,31 @@ export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.E
                 </LemonBanner>
             )}
             <LemonTable
+                data-attr="survey-response-drivers-table"
                 columns={columns}
                 loading={driversResponseLoading}
                 dataSource={results}
+                rowKey="event"
                 emptyState={
-                    <InsightEmptyState
-                        heading="No response drivers yet"
-                        detail="Once enough responders of this survey also perform events, the behaviors that distinguish detractors from promoters show up here."
-                    />
+                    errorLoading ? (
+                        <InsightErrorState excludeDetail onRetry={() => loadDrivers()} />
+                    ) : (
+                        <InsightEmptyState
+                            heading="No response drivers yet"
+                            detail="Once enough respondents of this survey also perform events, the behaviors that distinguish detractors from promoters show up here."
+                        />
+                    )
+                }
+                footer={
+                    suppressedEvents > 0 ? (
+                        <div className="flex items-center mt-2 mx-2">
+                            <span className="text-muted text-xs">
+                                {pluralize(suppressedEvents, 'event')} hidden — fewer than{' '}
+                                {driversResponse?.sampleThreshold} sampled respondents performed{' '}
+                                {suppressedEvents === 1 ? 'it' : 'them'}.
+                            </span>
+                        </div>
+                    ) : undefined
                 }
                 expandable={{
                     noIndent: true,
@@ -145,18 +165,18 @@ export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.E
                                 embedded
                                 stealth
                                 columns={[
-                                    { title: '', dataIndex: 'row' },
-                                    { title: `Did "${record.event}"`, dataIndex: 'with_event' },
-                                    { title: `Did not`, dataIndex: 'without_event' },
+                                    { dataIndex: 'row' },
+                                    { title: record.event, dataIndex: 'with_event' },
+                                    { title: `No ${record.event}`, dataIndex: 'without_event' },
                                 ]}
                                 dataSource={[
                                     {
-                                        row: 'Detractors',
+                                        row: NPS_DETRACTOR_LABEL,
                                         with_event: record.population.detractors_with,
                                         without_event: record.population.detractors_without,
                                     },
                                     {
-                                        row: 'Promoters',
+                                        row: NPS_PROMOTER_LABEL,
                                         with_event: record.population.promoters_with,
                                         without_event: record.population.promoters_without,
                                     },
@@ -166,12 +186,6 @@ export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.E
                     },
                 }}
             />
-            {suppressedEvents > 0 && (
-                <div className="text-secondary text-xs">
-                    {humanFriendlyNumber(suppressedEvents)} event{suppressedEvents === 1 ? '' : 's'} hidden — fewer than{' '}
-                    {driversResponse?.sampleThreshold} sampled responders performed them, too few to report honestly.
-                </div>
-            )}
         </div>
     )
 }

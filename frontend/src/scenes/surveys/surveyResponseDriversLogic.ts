@@ -1,4 +1,4 @@
-import { afterMount, kea, key, path, props } from 'kea'
+import { afterMount, kea, key, path, props, reducers } from 'kea'
 import { loaders } from 'kea-loaders'
 
 import api from 'lib/api'
@@ -30,10 +30,20 @@ export const surveyResponseDriversLogic = kea<surveyResponseDriversLogicType>([
                     surveyId: props.surveyId,
                     tags: { productKey: ProductKey.SURVEYS },
                 })
-                return await api.query(query, { refresh: 'force_blocking' })
+                return await api.query(query, { refresh: 'blocking' })
             },
         },
     })),
+    reducers({
+        errorLoading: [
+            false,
+            {
+                loadDrivers: () => false,
+                loadDriversSuccess: () => false,
+                loadDriversFailure: () => true,
+            },
+        ],
+    }),
     afterMount(({ actions }) => {
         actions.loadDrivers()
     }),

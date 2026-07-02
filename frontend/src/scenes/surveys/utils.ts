@@ -301,6 +301,15 @@ const NPS_SCALE_SIZE = 11 // 0-10 scale
 const NPS_PROMOTER_MIN = 9 // 9-10 are promoters
 const NPS_PASSIVE_MIN = 7 // 7-8 are passives. 0-6 are detractors but we don't need a variable for that.
 
+export function surveyHasNpsQuestion(survey: Pick<Survey, 'questions'>): boolean {
+    return (survey.questions ?? []).some(
+        (question) =>
+            question.type === SurveyQuestionType.Rating &&
+            (question as RatingSurveyQuestion).scale === SURVEY_RATING_SCALE.NPS_10_POINT &&
+            (question as RatingSurveyQuestion).isNpsQuestion !== false
+    )
+}
+
 interface NPSRawData {
     values: number[]
     total: number

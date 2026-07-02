@@ -63,9 +63,9 @@ import { SurveyResultsRefreshStatus } from './components/SurveyResultsRefreshSta
 import { NEW_SURVEY } from './constants'
 import { useSurveyResponseColumns } from './hooks/useSurveyResponseColumns'
 import { SurveyHeadline } from './SurveyHeadline'
-import { SurveyResponseDrivers, surveyHasNpsQuestion } from './SurveyResponseDrivers'
+import { SurveyResponseDrivers } from './SurveyResponseDrivers'
 import { SurveySceneMenuBar } from './SurveySceneMenuBar'
-import { canUseSurveyWizard } from './utils'
+import { canUseSurveyWizard, surveyHasNpsQuestion } from './utils'
 
 const RESOURCE_TYPE = 'survey'
 

@@ -71,7 +71,8 @@ import {
 
 import { SurveyResultsRefreshStatus } from '../components/SurveyResultsRefreshStatus'
 import { NEW_SURVEY } from '../constants'
-import { SurveyResponseDrivers, surveyHasNpsQuestion } from '../SurveyResponseDrivers'
+import { SurveyResponseDrivers } from '../SurveyResponseDrivers'
+import { surveyHasNpsQuestion } from '../utils'
 import { SurveyDraftContent } from './SurveyDraftContent'
 import { SurveyResultsFiltersBar } from './SurveyFilters'
 import { SurveyResponseExpandedRow } from './SurveyResponseExpandedRow'
