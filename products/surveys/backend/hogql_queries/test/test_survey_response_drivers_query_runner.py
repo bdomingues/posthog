@@ -499,6 +499,7 @@ class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
             runner.to_actors_query(target_event="csv import failed", bucket="passive", performed=True)
 
     @freeze_time("2024-01-15T12:00:00Z")
+    @snapshot_clickhouse_queries
     def test_actors_recordings_enrich_rows_without_changing_membership(self) -> None:
         survey = self._create_survey()
         self._seed_responder(
@@ -511,7 +512,6 @@ class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
             distinct_id="rec_detractor",
             first_timestamp="2024-01-12T09:55:00Z",
             last_timestamp="2024-01-12T10:05:00Z",
-            retention_period_days=9999,
             ensure_analytics_event_in_session=False,
         )
         flush_persons_and_events()

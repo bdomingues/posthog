@@ -83,7 +83,7 @@ export const surveyResponseDriversLogic = kea<surveyResponseDriversLogicType>([
                     </>
                 ),
                 query,
-                ...(performed ? { additionalSelect: { matched_recordings: 'matched_recordings' as const } } : {}),
+                ...(performed ? { additionalSelect: { matched_recordings: 'matched_recordings' } } : {}),
             })
         },
     })),
