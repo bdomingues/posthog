@@ -76,7 +76,6 @@ from posthog.schema_enums import (
     DefaultChannelTypes as DefaultChannelTypes,
     DetailedResultsAggregationType as DetailedResultsAggregationType,
     DetectorType as DetectorType,
-    Direction as Direction,
     Display as Display,
     Display1 as Display1,
     DisplayType as DisplayType,
@@ -186,6 +185,7 @@ from posthog.schema_enums import (
     NeighborDirection as NeighborDirection,
     NodeKind as NodeKind,
     NonIntegratedConversionsColumnsSchemaNames as NonIntegratedConversionsColumnsSchemaNames,
+    NpsBucket as NpsBucket,
     Operator as Operator,
     OrderBy as OrderBy,
     OrderDirection as OrderDirection,
@@ -7390,7 +7390,7 @@ class SurveyResponseDriver(BaseModel):
         extra="forbid",
     )
     confidence: Confidence
-    direction: Direction
+    direction: NpsBucket
     event: str
     odds_ratio: float
     population: Population1
@@ -24665,6 +24665,25 @@ class StickinessQuery(BaseModel):
     version: float | None = Field(default=None, description="version of the node, used for schema migrations")
 
 
+class SurveyResponseDriversActorsQuery(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    bucket: NpsBucket = Field(..., description="NPS bucket of the clicked population cell.")
+    event: str = Field(..., description="Behavioral event of the clicked population cell.")
+    includeRecordings: bool | None = None
+    kind: Literal["SurveyResponseDriversActorsQuery"] = "SurveyResponseDriversActorsQuery"
+    modifiers: HogQLQueryModifiers | None = Field(default=None, description="Modifiers used when performing the query")
+    performed: bool = Field(
+        ...,
+        description=("True for the people who performed the event, false for the bucket members who did not."),
+    )
+    response: ActorsQueryResponse | None = None
+    source: SurveyResponseDriversQuery
+    tags: QueryLogTags | None = None
+    version: float | None = Field(default=None, description="version of the node, used for schema migrations")
+
+
 class TeamTaxonomyQuery(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -27481,6 +27500,7 @@ class InsightActorsQueryOptions(BaseModel):
         | FunnelCorrelationActorsQuery
         | StickinessActorsQuery
         | ExperimentActorsQuery
+        | SurveyResponseDriversActorsQuery
     )
     version: float | None = Field(default=None, description="version of the node, used for schema migrations")
 
@@ -27635,6 +27655,7 @@ class ActorsQuery(BaseModel):
         | FunnelCorrelationActorsQuery
         | ExperimentActorsQuery
         | StickinessActorsQuery
+        | SurveyResponseDriversActorsQuery
         | HogQLQuery
         | None
     ) = None

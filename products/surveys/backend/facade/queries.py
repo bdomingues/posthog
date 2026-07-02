@@ -7,6 +7,9 @@ facade — so the heavy HogQL imports stay off the ``django.setup()`` path for
 config-only consumers.
 """
 
-from products.surveys.backend.hogql_queries.survey_response_drivers_query_runner import SurveyResponseDriversQueryRunner
+from products.surveys.backend.hogql_queries.survey_response_drivers_query_runner import (
+    SurveyResponseDriversActorsQueryRunner,
+    SurveyResponseDriversQueryRunner,
+)
 
-__all__ = ["SurveyResponseDriversQueryRunner"]
+__all__ = ["SurveyResponseDriversActorsQueryRunner", "SurveyResponseDriversQueryRunner"]

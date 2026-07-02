@@ -5,6 +5,8 @@ from typing import Any
 
 from posthog.schema import (
     CachedSurveyResponseDriversQueryResponse,
+    HogQLQueryResponse,
+    SurveyResponseDriversActorsQuery,
     SurveyResponseDriversQuery,
     SurveyResponseDriversQueryResponse,
 )
@@ -65,6 +67,18 @@ RESPONDERS_SELECT = """SELECT
     )
     WHERE score IS NOT NULL AND score >= 0 AND score <= {scale_max}
     GROUP BY person_id"""
+
+# Shared by the drivers ranking and the actors drill-down so the people behind a cell
+# are, by construction, the people the cell counted.
+PERSON_EVENTS_SELECT = """SELECT e.event AS event, e.person_id AS person_id, any(r.bucket) AS bucket
+    FROM events AS e
+    INNER JOIN responders AS r ON e.person_id = r.person_id
+    WHERE e.timestamp >= {date_from} - toIntervalDay({days})
+        AND e.timestamp <= {date_to} + toIntervalDay({days})
+        AND e.timestamp >= r.response_ts - toIntervalDay({days})
+        AND e.timestamp <= r.response_ts + toIntervalDay({days})
+        AND e.event NOT IN {survey_events}
+    GROUP BY e.event, e.person_id"""
 
 
 class SurveyResponseDriversQueryRunner(AnalyticsQueryRunner[SurveyResponseDriversQueryResponse]):
@@ -253,8 +267,12 @@ class SurveyResponseDriversQueryRunner(AnalyticsQueryRunner[SurveyResponseDriver
 
         return placeholders, archived_clause
 
-    def _totals_query(self) -> ast.SelectQuery | ast.SelectSetQuery:
+    def _responders_select(self) -> tuple[str, dict[str, ast.Expr]]:
         placeholders, archived_clause = self._placeholders()
+        return RESPONDERS_SELECT.replace("ARCHIVED_CLAUSE", archived_clause), placeholders
+
+    def _totals_query(self) -> ast.SelectQuery | ast.SelectSetQuery:
+        responders_select, placeholders = self._responders_select()
         template = (
             """SELECT
     countIf(bucket = 'detractor') AS total_detractors,
@@ -262,18 +280,18 @@ class SurveyResponseDriversQueryRunner(AnalyticsQueryRunner[SurveyResponseDriver
     countIf(bucket = 'passive') AS total_passives
 FROM (
     """
-            + RESPONDERS_SELECT.replace("ARCHIVED_CLAUSE", archived_clause)
+            + responders_select
             + """
 )"""
         )
         return parse_select(template, placeholders=placeholders)
 
     def to_query(self) -> ast.SelectQuery | ast.SelectSetQuery:
-        placeholders, archived_clause = self._placeholders()
+        responders_select, placeholders = self._responders_select()
         template = (
             """WITH responders AS (
     """
-            + RESPONDERS_SELECT.replace("ARCHIVED_CLAUSE", archived_clause)
+            + responders_select
             + """
 )
 SELECT
@@ -281,17 +299,99 @@ SELECT
     countIf(bucket = 'detractor') AS detractors_with,
     countIf(bucket = 'promoter') AS promoters_with
 FROM (
-    SELECT e.event AS event, e.person_id AS person_id, any(r.bucket) AS bucket
-    FROM events AS e
-    INNER JOIN responders AS r ON e.person_id = r.person_id
-    WHERE e.timestamp >= {date_from} - toIntervalDay({days})
-        AND e.timestamp <= {date_to} + toIntervalDay({days})
-        AND e.timestamp >= r.response_ts - toIntervalDay({days})
-        AND e.timestamp <= r.response_ts + toIntervalDay({days})
-        AND e.event NOT IN {survey_events}
-    GROUP BY e.event, e.person_id
+    """
+            + PERSON_EVENTS_SELECT
+            + """
 )
 GROUP BY event
 ORDER BY detractors_with + promoters_with DESC"""
         )
         return parse_select(template, placeholders=placeholders)
+
+    def to_actors_query(
+        self, *, target_event: str, bucket: str, performed: bool
+    ) -> ast.SelectQuery | ast.SelectSetQuery:
+        if bucket not in ("detractor", "promoter"):
+            raise ValueError("bucket must be 'detractor' or 'promoter'")
+
+        responders_select, placeholders = self._responders_select()
+        placeholders["target_event"] = ast.Constant(value=target_event)
+        placeholders["target_bucket"] = ast.Constant(value=bucket)
+
+        if performed:
+            # The people a `<bucket>s_with` cell counted: same responders CTE, same
+            # person-events join, filtered to one (event, bucket) cell.
+            template = (
+                """WITH responders AS (
+    """
+                + responders_select
+                + """
+)
+SELECT person_id AS actor_id
+FROM (
+    """
+                + PERSON_EVENTS_SELECT
+                + """
+)
+WHERE event = {target_event} AND bucket = {target_bucket}"""
+            )
+        else:
+            # `<bucket>s_without` is derived in _drivers() as total minus performers, so
+            # the actors are bucket members minus performers of the event — from the same
+            # two templates, or the modal could disagree with the cell.
+            template = (
+                """WITH responders AS (
+    """
+                + responders_select
+                + """
+)
+SELECT person_id AS actor_id
+FROM responders
+WHERE bucket = {target_bucket}
+    AND person_id NOT IN (
+        SELECT person_id
+        FROM (
+    """
+                + PERSON_EVENTS_SELECT
+                + """
+        )
+        WHERE event = {target_event}
+    )"""
+            )
+
+        return parse_select(template, placeholders=placeholders)
+
+
+class SurveyResponseDriversActorsQueryRunner(AnalyticsQueryRunner[HogQLQueryResponse]):
+    """Resolves one population cell of the drivers table to its people.
+
+    Only ever used as an ``ActorsQuery.source``: ``ActorsQueryRunner`` instantiates this
+    runner and calls ``to_actors_query()``, which delegates to the main runner's shared
+    templates so the modal's people are exactly the cell's count.
+    """
+
+    query: SurveyResponseDriversActorsQuery
+
+    @cached_property
+    def source_runner(self) -> SurveyResponseDriversQueryRunner:
+        return SurveyResponseDriversQueryRunner(
+            query=self.query.source,
+            team=self.team,
+            timings=self.timings,
+            modifiers=self.modifiers,
+            limit_context=self.limit_context,
+            user=self.user,
+        )
+
+    def to_query(self) -> ast.SelectQuery | ast.SelectSetQuery:
+        return self.to_actors_query()
+
+    def to_actors_query(self) -> ast.SelectQuery | ast.SelectSetQuery:
+        return self.source_runner.to_actors_query(
+            target_event=self.query.event,
+            bucket=self.query.bucket.value,
+            performed=self.query.performed,
+        )
+
+    def _calculate(self) -> HogQLQueryResponse:
+        raise ValueError("SurveyResponseDriversActorsQuery is only usable as an ActorsQuery source")

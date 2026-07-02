@@ -12,7 +12,11 @@ from posthog.test.base import (
 
 from parameterized import parameterized
 
-from posthog.schema import SurveyResponseDriversQuery
+from posthog.schema import ActorsQuery, SurveyResponseDriversActorsQuery, SurveyResponseDriversQuery
+
+from posthog.hogql.query import execute_hogql_query
+
+from posthog.hogql_queries.query_runner import get_query_runner
 
 from products.surveys.backend.hogql_queries.survey_response_drivers_query_runner import SurveyResponseDriversQueryRunner
 from products.surveys.backend.models import Survey, SurveyResponseArchive
@@ -28,8 +32,15 @@ NPS_QUESTION = {
 
 
 class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
+    # Pinned ids: snapshotted SQL embeds the survey id and archived event uuids, so they
+    # must be deterministic across runs (the snapshot normalizer does not redact them).
+    SURVEY_ID = "01234567-89ab-cdef-0123-456789abcdef"
+    ARCHIVED_UUID = "11111111-1111-4111-8111-111111111111"
+    ARCHIVED_RESUBMIT_UUID = "22222222-2222-4222-8222-222222222222"
+
     def _create_survey(self, questions: list[dict[str, Any]] | None = None) -> Survey:
         return Survey.objects.create(
+            id=self.SURVEY_ID,
             team=self.team,
             name="NPS survey",
             type="popover",
@@ -45,6 +56,7 @@ class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
         events: tuple[str, ...] = (),
         submission_id: str | None = None,
         response_timestamp: str = "2024-01-10T10:00:00Z",
+        event_uuid: str | None = None,
     ) -> str:
         _create_person(distinct_ids=[distinct_id], team_id=self.team.pk)
         response_uuid = _create_event(
@@ -52,6 +64,7 @@ class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
             event="survey sent",
             distinct_id=distinct_id,
             timestamp=response_timestamp,
+            event_uuid=event_uuid,
             properties={
                 "$survey_id": str(survey.id),
                 "$survey_response": str(score),
@@ -209,7 +222,9 @@ class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
     @snapshot_clickhouse_queries
     def test_excludes_archived_responses(self) -> None:
         survey = self._create_survey()
-        archived_uuid = self._seed_responder(survey, "archived_detractor", score=0, events=("some event",))
+        archived_uuid = self._seed_responder(
+            survey, "archived_detractor", score=0, events=("some event",), event_uuid=self.ARCHIVED_UUID
+        )
         self._seed_responder(survey, "kept_detractor", score=1, events=("some event",))
         self._seed_responder(survey, "kept_promoter", score=10, events=("some event",))
         SurveyResponseArchive.objects.create(team=self.team, survey=survey, response_uuid=archived_uuid)
@@ -348,3 +363,135 @@ class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
         response = self._calculate(survey, questionId="q-nps-2")
         assert response["questionId"] == "q-nps-2"
         assert response["questionIndex"] == 1
+
+    def _seed_actors_fixture(self) -> Survey:
+        survey = self._create_survey()
+        for i in range(3):
+            self._seed_responder(survey, f"detractor_with_{i}", score=2, events=("csv import failed",))
+        for i in range(2):
+            self._seed_responder(survey, f"detractor_without_{i}", score=1)
+        for i in range(2):
+            self._seed_responder(survey, f"promoter_with_{i}", score=10, events=("csv import failed",))
+        for i in range(5):
+            self._seed_responder(survey, f"promoter_without_{i}", score=9)
+
+        # Archived performer: must be invisible to every cell.
+        archived_uuid = self._seed_responder(
+            survey, "archived_detractor", score=0, events=("csv import failed",), event_uuid=self.ARCHIVED_UUID
+        )
+        SurveyResponseArchive.objects.create(team=self.team, survey=survey, response_uuid=archived_uuid)
+
+        # Passive performer: passives are excluded from every cell of the 2x2.
+        self._seed_responder(survey, "passive_with", score=8, events=("csv import failed",))
+
+        # Resubmitter: first submission scores as promoter, final resubmission as
+        # detractor — must count once, as a detractor performer.
+        self._seed_responder(survey, "resubmitter", score=10, events=("csv import failed",), submission_id="sub-actors")
+        _create_event(
+            team=self.team,
+            event="survey sent",
+            distinct_id="resubmitter",
+            timestamp="2024-01-10T11:00:00Z",
+            properties={
+                "$survey_id": str(survey.id),
+                "$survey_response": "2",
+                "$survey_submission_id": "sub-actors",
+                "$survey_completed": True,
+            },
+        )
+
+        # Archived-canonical resubmitter: the dedupe filter keeps only the latest event
+        # per submission id, and that canonical event is archived — so this performer
+        # must be excluded from every cell, even though the earlier duplicate remains.
+        self._seed_responder(
+            survey, "archived_resubmitter", score=2, events=("csv import failed",), submission_id="sub-arch"
+        )
+        archived_resubmit_uuid = _create_event(
+            team=self.team,
+            event="survey sent",
+            distinct_id="archived_resubmitter",
+            timestamp="2024-01-10T11:00:00Z",
+            event_uuid=self.ARCHIVED_RESUBMIT_UUID,
+            properties={
+                "$survey_id": str(survey.id),
+                "$survey_response": "2",
+                "$survey_submission_id": "sub-arch",
+                "$survey_completed": True,
+            },
+        )
+        SurveyResponseArchive.objects.create(team=self.team, survey=survey, response_uuid=archived_resubmit_uuid)
+
+        # Boundary responder: only performs the event outside the ±30d window, so they
+        # belong to the detractor did-not cell.
+        self._seed_responder(survey, "boundary_detractor", score=3)
+        _create_event(
+            team=self.team,
+            event="csv import failed",
+            distinct_id="boundary_detractor",
+            timestamp="2023-12-05T10:00:00Z",
+            properties={},
+        )
+        flush_persons_and_events()
+        return survey
+
+    def _actor_count(self, survey: Survey, event: str, bucket: str, performed: bool) -> int:
+        runner = SurveyResponseDriversQueryRunner(
+            team=self.team,
+            query=SurveyResponseDriversQuery(kind="SurveyResponseDriversQuery", surveyId=str(survey.id)),
+        )
+        result = execute_hogql_query(
+            query=runner.to_actors_query(target_event=event, bucket=bucket, performed=performed),
+            team=self.team,
+        )
+        return len(result.results)
+
+    @parameterized.expand(
+        [
+            ("detractor", True, 4),
+            ("detractor", False, 3),
+            ("promoter", True, 2),
+            ("promoter", False, 5),
+        ]
+    )
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_actors_match_population_cells(self, bucket: str, performed: bool, expected: int) -> None:
+        survey = self._seed_actors_fixture()
+
+        response = self._calculate(survey)
+        population = self._drivers_by_event(response)["csv import failed"]["population"]
+        cell = population[f"{bucket}s_with" if performed else f"{bucket}s_without"]
+
+        assert cell == expected
+        assert self._actor_count(survey, "csv import failed", bucket, performed) == cell
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    @snapshot_clickhouse_queries
+    def test_actors_query_through_actors_query_runner(self) -> None:
+        survey = self._seed_actors_fixture()
+
+        actors_query = ActorsQuery(
+            kind="ActorsQuery",
+            source=SurveyResponseDriversActorsQuery(
+                kind="SurveyResponseDriversActorsQuery",
+                source=SurveyResponseDriversQuery(kind="SurveyResponseDriversQuery", surveyId=str(survey.id)),
+                event="csv import failed",
+                bucket="detractor",
+                performed=True,
+            ),
+            select=["actor"],
+        )
+        response = get_query_runner(actors_query, self.team).calculate()
+
+        assert len(response.results) == 4
+        distinct_ids = {distinct_id for row in response.results for distinct_id in row[0]["distinct_ids"]}
+        assert distinct_ids == {"detractor_with_0", "detractor_with_1", "detractor_with_2", "resubmitter"}
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_actors_query_rejects_invalid_bucket(self) -> None:
+        survey = self._create_survey()
+        runner = SurveyResponseDriversQueryRunner(
+            team=self.team,
+            query=SurveyResponseDriversQuery(kind="SurveyResponseDriversQuery", surveyId=str(survey.id)),
+        )
+        with self.assertRaises(ValueError):
+            runner.to_actors_query(target_event="csv import failed", bucket="passive", performed=True)

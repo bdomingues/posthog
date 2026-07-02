@@ -293,6 +293,7 @@ def kind_fallback_tags(kind: NodeKind) -> FallbackTags | None:
             | NodeKind.FUNNELS_ACTORS_QUERY
             | NodeKind.FUNNEL_CORRELATION_QUERY
             | NodeKind.FUNNEL_CORRELATION_ACTORS_QUERY
+            | NodeKind.SURVEY_RESPONSE_DRIVERS_ACTORS_QUERY
             # data-source nodes, not full queries
             | NodeKind.EVENTS_NODE
             | NodeKind.GROUP_NODE

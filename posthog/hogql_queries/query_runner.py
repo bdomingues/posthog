@@ -834,6 +834,18 @@ def get_query_runner(
             user=user,
         )
 
+    if kind == "SurveyResponseDriversActorsQuery":
+        from products.surveys.backend.facade.queries import SurveyResponseDriversActorsQueryRunner
+
+        return SurveyResponseDriversActorsQueryRunner(
+            query=query,
+            team=team,
+            timings=timings,
+            modifiers=modifiers,
+            limit_context=limit_context,
+            user=user,
+        )
+
     if kind == "ErrorTrackingSimilarIssuesQuery":
         from products.error_tracking.backend.facade.queries import ErrorTrackingSimilarIssuesQueryRunner
 

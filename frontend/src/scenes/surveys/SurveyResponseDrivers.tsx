@@ -4,6 +4,7 @@ import { LemonBanner, LemonSkeleton, LemonTable, LemonTableColumns, LemonTag } f
 
 import { humanFriendlyNumber, percentage } from 'lib/utils/numbers'
 import { pluralize } from 'lib/utils/strings'
+import { ValueInspectorButton } from 'scenes/funnels/ValueInspectorButton'
 import { InsightEmptyState, InsightErrorState } from 'scenes/insights/EmptyStates'
 
 import { SurveyResponseDriver } from '~/queries/schema/schema-general'
@@ -19,7 +20,7 @@ export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.E
     const { driversResponse, driversResponseLoading, errorLoading } = useValues(
         surveyResponseDriversLogic({ surveyId })
     )
-    const { loadDrivers } = useActions(surveyResponseDriversLogic({ surveyId }))
+    const { loadDrivers, openDriversPersonsModal } = useActions(surveyResponseDriversLogic({ surveyId }))
 
     const results = driversResponse?.results ?? []
     const totals = driversResponse?.totals
@@ -60,7 +61,18 @@ export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.E
                             {total > 0 ? percentage(detractors_with / total, 0) : '—'}
                         </span>
                         <span className="text-secondary text-xs">
-                            {humanFriendlyNumber(detractors_with)} of {humanFriendlyNumber(total)}
+                            <ValueInspectorButton
+                                data-attr="survey-response-drivers-population"
+                                onClick={() =>
+                                    openDriversPersonsModal({
+                                        event: record.event,
+                                        bucket: 'detractor',
+                                        performed: true,
+                                    })
+                                }
+                            >
+                                {humanFriendlyNumber(detractors_with)} of {humanFriendlyNumber(total)}
+                            </ValueInspectorButton>
                         </span>
                     </div>
                 )
@@ -80,7 +92,18 @@ export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.E
                             {total > 0 ? percentage(promoters_with / total, 0) : '—'}
                         </span>
                         <span className="text-secondary text-xs">
-                            {humanFriendlyNumber(promoters_with)} of {humanFriendlyNumber(total)}
+                            <ValueInspectorButton
+                                data-attr="survey-response-drivers-population"
+                                onClick={() =>
+                                    openDriversPersonsModal({
+                                        event: record.event,
+                                        bucket: 'promoter',
+                                        performed: true,
+                                    })
+                                }
+                            >
+                                {humanFriendlyNumber(promoters_with)} of {humanFriendlyNumber(total)}
+                            </ValueInspectorButton>
                         </span>
                     </div>
                 )
@@ -160,23 +183,44 @@ export function SurveyResponseDrivers({ surveyId }: { surveyId: string }): JSX.E
                 expandable={{
                     noIndent: true,
                     expandedRowRender: function RenderExpandedRow(record) {
+                        const cell = (
+                            bucket: 'detractor' | 'promoter',
+                            performed: boolean,
+                            count: number
+                        ): JSX.Element => (
+                            <ValueInspectorButton
+                                onClick={() => openDriversPersonsModal({ event: record.event, bucket, performed })}
+                            >
+                                {humanFriendlyNumber(count)}
+                            </ValueInspectorButton>
+                        )
                         return (
                             <LemonTable
                                 embedded
                                 stealth
                                 columns={[
                                     { dataIndex: 'row' },
-                                    { title: record.event, dataIndex: 'with_event' },
-                                    { title: `No ${record.event}`, dataIndex: 'without_event' },
+                                    {
+                                        title: record.event,
+                                        dataIndex: 'with_event',
+                                        render: (_, r) => cell(r.bucket, true, r.with_event),
+                                    },
+                                    {
+                                        title: `No ${record.event}`,
+                                        dataIndex: 'without_event',
+                                        render: (_, r) => cell(r.bucket, false, r.without_event),
+                                    },
                                 ]}
                                 dataSource={[
                                     {
                                         row: NPS_DETRACTOR_LABEL,
+                                        bucket: 'detractor' as const,
                                         with_event: record.population.detractors_with,
                                         without_event: record.population.detractors_without,
                                     },
                                     {
                                         row: NPS_PROMOTER_LABEL,
+                                        bucket: 'promoter' as const,
                                         with_event: record.population.promoters_with,
                                         without_event: record.population.promoters_without,
                                     },

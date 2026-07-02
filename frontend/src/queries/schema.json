@@ -451,6 +451,9 @@
                             "$ref": "#/definitions/StickinessActorsQuery"
                         },
                         {
+                            "$ref": "#/definitions/SurveyResponseDriversActorsQuery"
+                        },
+                        {
                             "$ref": "#/definitions/HogQLQuery"
                         }
                     ]
@@ -25303,6 +25306,9 @@
                         },
                         {
                             "$ref": "#/definitions/ExperimentActorsQuery"
+                        },
+                        {
+                            "$ref": "#/definitions/SurveyResponseDriversActorsQuery"
                         }
                     ]
                 },
@@ -31413,6 +31419,7 @@
                 "ErrorTrackingBreakdownsQuery",
                 "ErrorTrackingIssueCorrelationQuery",
                 "SurveyResponseDriversQuery",
+                "SurveyResponseDriversActorsQuery",
                 "LogsQuery",
                 "LogAttributesQuery",
                 "LogValuesQuery",
@@ -31761,6 +31768,10 @@
             },
             "required": ["type", "notebook_id", "content"],
             "type": "object"
+        },
+        "NpsBucket": {
+            "enum": ["detractor", "promoter"],
+            "type": "string"
         },
         "OCSVMDetectorConfig": {
             "additionalProperties": false,
@@ -44793,8 +44804,7 @@
                     "type": "string"
                 },
                 "direction": {
-                    "enum": ["detractor", "promoter"],
-                    "type": "string"
+                    "$ref": "#/definitions/NpsBucket"
                 },
                 "event": {
                     "type": "string"
@@ -44823,6 +44833,49 @@
                 }
             },
             "required": ["event", "odds_ratio", "direction", "confidence", "population"],
+            "type": "object"
+        },
+        "SurveyResponseDriversActorsQuery": {
+            "additionalProperties": false,
+            "properties": {
+                "bucket": {
+                    "$ref": "#/definitions/NpsBucket",
+                    "description": "NPS bucket of the clicked population cell."
+                },
+                "event": {
+                    "description": "Behavioral event of the clicked population cell.",
+                    "type": "string"
+                },
+                "includeRecordings": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "const": "SurveyResponseDriversActorsQuery",
+                    "type": "string"
+                },
+                "modifiers": {
+                    "$ref": "#/definitions/HogQLQueryModifiers",
+                    "description": "Modifiers used when performing the query"
+                },
+                "performed": {
+                    "description": "True for the people who performed the event, false for the bucket members who did not.",
+                    "type": "boolean"
+                },
+                "response": {
+                    "$ref": "#/definitions/ActorsQueryResponse"
+                },
+                "source": {
+                    "$ref": "#/definitions/SurveyResponseDriversQuery"
+                },
+                "tags": {
+                    "$ref": "#/definitions/QueryLogTags"
+                },
+                "version": {
+                    "description": "version of the node, used for schema migrations",
+                    "type": "number"
+                }
+            },
+            "required": ["bucket", "event", "kind", "performed", "source"],
             "type": "object"
         },
         "SurveyResponseDriversQuery": {

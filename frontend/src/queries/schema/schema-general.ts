@@ -109,6 +109,7 @@ export enum NodeKind {
     ErrorTrackingBreakdownsQuery = 'ErrorTrackingBreakdownsQuery',
     ErrorTrackingIssueCorrelationQuery = 'ErrorTrackingIssueCorrelationQuery',
     SurveyResponseDriversQuery = 'SurveyResponseDriversQuery',
+    SurveyResponseDriversActorsQuery = 'SurveyResponseDriversActorsQuery',
     LogsQuery = 'LogsQuery',
     LogAttributesQuery = 'LogAttributesQuery',
     LogValuesQuery = 'LogValuesQuery',
@@ -2360,6 +2361,7 @@ export interface ActorsQuery extends DataNode<ActorsQueryResponse> {
         | FunnelCorrelationActorsQuery
         | ExperimentActorsQuery
         | StickinessActorsQuery
+        | SurveyResponseDriversActorsQuery
         | HogQLQuery
     select?: HogQLExpression[]
     search?: string
@@ -3140,10 +3142,23 @@ export interface SurveyResponseDriversQuery extends DataNode<SurveyResponseDrive
     daysAroundResponse?: integer
 }
 
+export type NpsBucket = 'detractor' | 'promoter'
+
+export interface SurveyResponseDriversActorsQuery extends InsightActorsQueryBase {
+    kind: NodeKind.SurveyResponseDriversActorsQuery
+    source: SurveyResponseDriversQuery
+    /** Behavioral event of the clicked population cell. */
+    event: string
+    /** NPS bucket of the clicked population cell. */
+    bucket: NpsBucket
+    /** True for the people who performed the event, false for the bucket members who did not. */
+    performed: boolean
+}
+
 export interface SurveyResponseDriver {
     event: string
     odds_ratio: number
-    direction: 'detractor' | 'promoter'
+    direction: NpsBucket
     confidence: 'high' | 'low'
     population: {
         detractors_with: integer
@@ -4857,6 +4872,7 @@ export interface InsightActorsQueryOptions extends Node<InsightActorsQueryOption
         | FunnelCorrelationActorsQuery
         | StickinessActorsQuery
         | ExperimentActorsQuery
+        | SurveyResponseDriversActorsQuery
 }
 
 export interface DatabaseSchemaSchema {

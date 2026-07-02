@@ -2510,6 +2510,7 @@ class NodeKind(StrEnum):
     ERROR_TRACKING_BREAKDOWNS_QUERY = "ErrorTrackingBreakdownsQuery"
     ERROR_TRACKING_ISSUE_CORRELATION_QUERY = "ErrorTrackingIssueCorrelationQuery"
     SURVEY_RESPONSE_DRIVERS_QUERY = "SurveyResponseDriversQuery"
+    SURVEY_RESPONSE_DRIVERS_ACTORS_QUERY = "SurveyResponseDriversActorsQuery"
     LOGS_QUERY = "LogsQuery"
     LOG_ATTRIBUTES_QUERY = "LogAttributesQuery"
     LOG_VALUES_QUERY = "LogValuesQuery"
@@ -2588,6 +2589,11 @@ class NodeKind(StrEnum):
 class NonIntegratedConversionsColumnsSchemaNames(StrEnum):
     SOURCE = "Source"
     CAMPAIGN = "Campaign"
+
+
+class NpsBucket(StrEnum):
+    DETRACTOR = "detractor"
+    PROMOTER = "promoter"
 
 
 class PathType(StrEnum):
@@ -3236,11 +3242,6 @@ class SurveyQuestionType(StrEnum):
 class Confidence(StrEnum):
     HIGH = "high"
     LOW = "low"
-
-
-class Direction(StrEnum):
-    DETRACTOR = "detractor"
-    PROMOTER = "promoter"
 
 
 class SurveyTabPosition(StrEnum):
