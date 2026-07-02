@@ -69,8 +69,11 @@ RESPONDERS_SELECT = """SELECT
     GROUP BY person_id"""
 
 # Shared by the drivers ranking and the actors drill-down so the people behind a cell
-# are, by construction, the people the cell counted.
-PERSON_EVENTS_SELECT = """SELECT e.event AS event, e.person_id AS person_id, any(r.bucket) AS bucket
+# are, by construction, the people the cell counted. MATCHING_EVENTS_COLUMN is empty for
+# the ranking scan and becomes the recordings tuple array for actors drill-downs — the
+# tuple order (timestamp, uuid, $session_id, $window_id) is the positional contract
+# RecordingsHelper reads (session_id at index 2), same as the trends actors builder.
+PERSON_EVENTS_SELECT = """SELECT e.event AS event, e.person_id AS person_id, any(r.bucket) AS bucketMATCHING_EVENTS_COLUMN
     FROM events AS e
     INNER JOIN responders AS r ON e.person_id = r.person_id
     WHERE e.timestamp >= {date_from} - toIntervalDay({days})
@@ -79,6 +82,10 @@ PERSON_EVENTS_SELECT = """SELECT e.event AS event, e.person_id AS person_id, any
         AND e.timestamp <= r.response_ts + toIntervalDay({days})
         AND e.event NOT IN {survey_events}
     GROUP BY e.event, e.person_id"""
+
+MATCHING_EVENTS_COLUMN = (
+    ",\n    groupUniqArray(100)((e.timestamp, e.uuid, e.`$session_id`, e.`$window_id`)) AS matching_events"
+)
 
 
 class SurveyResponseDriversQueryRunner(AnalyticsQueryRunner[SurveyResponseDriversQueryResponse]):
@@ -300,7 +307,7 @@ SELECT
     countIf(bucket = 'promoter') AS promoters_with
 FROM (
     """
-            + PERSON_EVENTS_SELECT
+            + PERSON_EVENTS_SELECT.replace("MATCHING_EVENTS_COLUMN", "")
             + """
 )
 GROUP BY event
@@ -309,7 +316,7 @@ ORDER BY detractors_with + promoters_with DESC"""
         return parse_select(template, placeholders=placeholders)
 
     def to_actors_query(
-        self, *, target_event: str, bucket: str, performed: bool
+        self, *, target_event: str, bucket: str, performed: bool, include_recordings: bool = False
     ) -> ast.SelectQuery | ast.SelectSetQuery:
         if bucket not in ("detractor", "promoter"):
             raise ValueError("bucket must be 'detractor' or 'promoter'")
@@ -320,17 +327,22 @@ ORDER BY detractors_with + promoters_with DESC"""
 
         if performed:
             # The people a `<bucket>s_with` cell counted: same responders CTE, same
-            # person-events join, filtered to one (event, bucket) cell.
+            # person-events join, filtered to one (event, bucket) cell. The inner group by
+            # already yields one row per person for the fixed event, so the recordings
+            # column adds data, never rows — the cell count cannot change.
+            matching_events = MATCHING_EVENTS_COLUMN if include_recordings else ""
             template = (
                 """WITH responders AS (
     """
                 + responders_select
                 + """
 )
-SELECT person_id AS actor_id
+SELECT person_id AS actor_id"""
+                + (", matching_events" if include_recordings else "")
+                + """
 FROM (
     """
-                + PERSON_EVENTS_SELECT
+                + PERSON_EVENTS_SELECT.replace("MATCHING_EVENTS_COLUMN", matching_events)
                 + """
 )
 WHERE event = {target_event} AND bucket = {target_bucket}"""
@@ -352,7 +364,7 @@ WHERE bucket = {target_bucket}
         SELECT person_id
         FROM (
     """
-                + PERSON_EVENTS_SELECT
+                + PERSON_EVENTS_SELECT.replace("MATCHING_EVENTS_COLUMN", "")
                 + """
         )
         WHERE event = {target_event}
@@ -391,6 +403,7 @@ class SurveyResponseDriversActorsQueryRunner(AnalyticsQueryRunner[HogQLQueryResp
             target_event=self.query.event,
             bucket=self.query.bucket.value,
             performed=self.query.performed,
+            include_recordings=bool(self.query.includeRecordings),
         )
 
     def _calculate(self) -> HogQLQueryResponse:

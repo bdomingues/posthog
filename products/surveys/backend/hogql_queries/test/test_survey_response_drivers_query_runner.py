@@ -17,6 +17,7 @@ from posthog.schema import ActorsQuery, SurveyResponseDriversActorsQuery, Survey
 from posthog.hogql.query import execute_hogql_query
 
 from posthog.hogql_queries.query_runner import get_query_runner
+from posthog.session_recordings.queries.test.session_replay_sql import produce_replay_summary
 
 from products.surveys.backend.hogql_queries.survey_response_drivers_query_runner import SurveyResponseDriversQueryRunner
 from products.surveys.backend.models import Survey, SurveyResponseArchive
@@ -57,6 +58,7 @@ class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
         submission_id: str | None = None,
         response_timestamp: str = "2024-01-10T10:00:00Z",
         event_uuid: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         _create_person(distinct_ids=[distinct_id], team_id=self.team.pk)
         response_uuid = _create_event(
@@ -78,7 +80,7 @@ class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
                 event=event,
                 distinct_id=distinct_id,
                 timestamp="2024-01-12T10:00:00Z",
-                properties={},
+                properties={"$session_id": session_id, "$window_id": "w1"} if session_id else {},
             )
         return response_uuid
 
@@ -495,3 +497,45 @@ class TestSurveyResponseDriversQueryRunner(ClickhouseTestMixin, APIBaseTest):
         )
         with self.assertRaises(ValueError):
             runner.to_actors_query(target_event="csv import failed", bucket="passive", performed=True)
+
+    @freeze_time("2024-01-15T12:00:00Z")
+    def test_actors_recordings_enrich_rows_without_changing_membership(self) -> None:
+        survey = self._create_survey()
+        self._seed_responder(
+            survey, "rec_detractor", score=2, events=("csv import failed",), session_id="drivers-rec-1"
+        )
+        self._seed_responder(survey, "norec_detractor", score=1, events=("csv import failed",))
+        produce_replay_summary(
+            team_id=self.team.pk,
+            session_id="drivers-rec-1",
+            distinct_id="rec_detractor",
+            first_timestamp="2024-01-12T09:55:00Z",
+            last_timestamp="2024-01-12T10:05:00Z",
+            retention_period_days=9999,
+            ensure_analytics_event_in_session=False,
+        )
+        flush_persons_and_events()
+
+        actors_query = ActorsQuery(
+            kind="ActorsQuery",
+            source=SurveyResponseDriversActorsQuery(
+                kind="SurveyResponseDriversActorsQuery",
+                source=SurveyResponseDriversQuery(kind="SurveyResponseDriversQuery", surveyId=str(survey.id)),
+                event="csv import failed",
+                bucket="detractor",
+                performed=True,
+                includeRecordings=True,
+            ),
+            select=["actor", "matched_recordings"],
+        )
+        response = get_query_runner(actors_query, self.team).calculate()
+
+        recordings_by_distinct_id = {
+            distinct_id: row[1] for row in response.results for distinct_id in row[0]["distinct_ids"]
+        }
+        assert len(response.results) == 2
+        assert [recording["session_id"] for recording in recordings_by_distinct_id["rec_detractor"]] == [
+            "drivers-rec-1"
+        ]
+        assert recordings_by_distinct_id["rec_detractor"][0]["events"]
+        assert recordings_by_distinct_id["norec_detractor"] == []
