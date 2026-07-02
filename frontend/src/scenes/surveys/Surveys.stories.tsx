@@ -261,6 +261,39 @@ const MOCK_SURVEY_WITH_RESULTS: Survey = {
 }
 
 // Rows from the consolidated aggregate query: [question_id, label, count].
+const MOCK_SURVEY_RESPONSE_DRIVERS = {
+    columns: ['event', 'odds_ratio', 'direction', 'confidence', 'population'],
+    results: [
+        {
+            event: 'csv import failed',
+            odds_ratio: 5.4,
+            direction: 'detractor',
+            confidence: 'high',
+            population: { detractors_with: 27, detractors_without: 15, promoters_with: 6, promoters_without: 55 },
+        },
+        {
+            event: 'support ticket opened',
+            odds_ratio: 2.1,
+            direction: 'detractor',
+            confidence: 'low',
+            population: { detractors_with: 9, detractors_without: 33, promoters_with: 5, promoters_without: 56 },
+        },
+        {
+            event: 'saved view used',
+            odds_ratio: 0.31,
+            direction: 'promoter',
+            confidence: 'high',
+            population: { detractors_with: 8, detractors_without: 34, promoters_with: 38, promoters_without: 23 },
+        },
+    ],
+    totals: { promoters: 61, passives: 24, detractors: 42 },
+    skewed: false,
+    suppressedEvents: 3,
+    sampleThreshold: 3,
+    questionId: 'q-rating',
+    questionIndex: 0,
+}
+
 const MOCK_SURVEY_AGGREGATE_RESULTS = {
     columns: ['question_id', 'label', 'cnt'],
     types: [
@@ -350,6 +383,9 @@ const meta: Meta = {
                     if (body.kind == 'EventsQuery') {
                         return [200, MOCK_SURVEY_RESULTS]
                     }
+                    if (body.kind == 'SurveyResponseDriversQuery') {
+                        return [200, MOCK_SURVEY_RESPONSE_DRIVERS]
+                    }
                     return [200, MOCK_SURVEY_SHOWN]
                 },
                 // flag targeting has loaders, make sure they don't keep loading
@@ -362,6 +398,13 @@ export default meta
 
 type Story = StoryObj<{}>
 export const SurveysList: Story = {}
+
+export const SurveyResponseDriversTab: Story = {
+    parameters: {
+        pageUrl: `${urls.survey(MOCK_SURVEY_WITH_RESULTS.id)}?tab=drivers`,
+        featureFlags: ['surveys-redesigned-view', 'survey-response-drivers'],
+    },
+}
 
 export const SurveysGlobalSettings: Story = {
     parameters: {

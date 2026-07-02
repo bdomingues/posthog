@@ -63,6 +63,7 @@ import { SurveyResultsRefreshStatus } from './components/SurveyResultsRefreshSta
 import { NEW_SURVEY } from './constants'
 import { useSurveyResponseColumns } from './hooks/useSurveyResponseColumns'
 import { SurveyHeadline } from './SurveyHeadline'
+import { SurveyResponseDrivers, surveyHasNpsQuestion } from './SurveyResponseDrivers'
 import { SurveySceneMenuBar } from './SurveySceneMenuBar'
 import { canUseSurveyWizard } from './utils'
 
@@ -91,6 +92,7 @@ function SurveyViewLegacy({ id }: { id: string }): JSX.Element {
 
     const hasMultipleProjects = currentOrganization?.teams && currentOrganization.teams.length > 1
 
+    const hasResponseDrivers = useFeatureFlag('SURVEY_RESPONSE_DRIVERS')
     const [tabKey, setTabKey] = useState(survey.start_date ? 'results' : 'overview')
 
     const surveyId = survey?.id && survey.id !== 'new' ? survey.id : null
@@ -305,6 +307,15 @@ function SurveyViewLegacy({ id }: { id: string }): JSX.Element {
                                 key: 'overview',
                                 label: 'Overview',
                             },
+                            ...(hasResponseDrivers && survey.start_date && surveyHasNpsQuestion(survey)
+                                ? [
+                                      {
+                                          key: 'drivers',
+                                          label: 'Drivers',
+                                          content: <SurveyResponseDrivers surveyId={id} />,
+                                      },
+                                  ]
+                                : []),
                             {
                                 key: 'notifications',
                                 label: (
