@@ -71,6 +71,9 @@ export const surveyResponseDriversLogic = kea<surveyResponseDriversLogicType>([
                 event,
                 bucket,
                 performed,
+                // People who did not perform the event have no occurrences to match
+                // recordings against, so only the performed cells request them.
+                ...(performed ? { includeRecordings: true } : {}),
             })
             const bucketLabel = bucket === 'detractor' ? NPS_DETRACTOR_LABEL : NPS_PROMOTER_LABEL
             openPersonsModal({
@@ -80,6 +83,7 @@ export const surveyResponseDriversLogic = kea<surveyResponseDriversLogicType>([
                     </>
                 ),
                 query,
+                ...(performed ? { additionalSelect: { matched_recordings: 'matched_recordings' } } : {}),
             })
         },
     })),
